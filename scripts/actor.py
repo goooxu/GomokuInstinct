@@ -158,12 +158,20 @@ def main() -> int:
         if now - last_report >= 60.0:
             last_report = now
             stats = actor.stats
-            games = max(1, stats["games"])
+            games = stats["games"]
+            # 上千局同时推进，起步阶段一局都没走完是正常的；
+            # 这时不要拿 max(1, games) 去除，那会打印出「9400 手/局」这种假数字
+            if games == 0:
+                rates = "（尚无完成的对局）"
+            else:
+                rates = (
+                    f"{stats['moves'] / games:.0f} 手/局  "
+                    f"黑胜率 {stats['black_wins'] / games:.1%}  "
+                    f"禁手告负 {stats['forbidden_losses'] / games:.2%}"
+                )
             print(
-                f"[{prefix}] 局 {stats['games']:,}  手 {stats['moves']:,}  "
-                f"样本 {stats['samples']:,}  {stats['moves'] / games:.0f} 手/局  "
-                f"黑胜率 {stats['black_wins'] / games:.1%}  "
-                f"禁手告负 {stats['forbidden_losses'] / games:.2%}",
+                f"[{prefix}] 局 {games:,}  手 {stats['moves']:,}  "
+                f"样本 {stats['samples']:,}  {rates}",
                 flush=True,
             )
 

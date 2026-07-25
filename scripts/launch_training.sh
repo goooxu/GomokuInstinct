@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # 多卡训练编排：一张卡跑 trainer，其余卡各跑一个自博弈 actor。
 #
-#   ./scripts/launch_training.sh runs/renju15
-#   ./scripts/launch_training.sh runs/renju15 stop
+#   ./scripts/launch_training.sh runs/renju15          # 启动（已有进度则自动续训）
+#   ./scripts/launch_training.sh runs/renju15 status   # 看谁在跑
+#   ./scripts/launch_training.sh runs/renju15 stop     # 停止
 #
 # 分工按 GPU 与 CPU 的 NUMA 亲和来切：同一 socket 上的 GPU 与 CPU 核绑在一起，
 # 避免跨 socket 抢内存带宽。actor 与 trainer 之间除了文件系统没有任何耦合 ——
 # 任一侧崩了另一侧照常跑，重启后各自从最新状态接上。
+#
+# 进程管理走 **docker 容器名**，不走 pid：杀掉 docker run 客户端进程并不会停掉
+# 容器，只按 pid 管理会导致每次「停止再启动」都叠加一层，多个 trainer 争抢
+# checkpoint、多个同名 actor 互相覆盖分片，而且从进程列表上不容易看出来。
 #
 # 环境变量：
 #   GI_BOARD_SIZE   棋盘边长（默认 15）
@@ -16,45 +21,59 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUN_DIR="${1:?用法: launch_training.sh <run-dir> [stop]}"
+RUN_DIR="${1:?用法: launch_training.sh <run-dir> [start|stop|status]}"
 ACTION="${2:-start}"
 
 BOARD_SIZE="${GI_BOARD_SIZE:-15}"
 TRAINER_GPU="${GI_TRAINER_GPU:-0}"
 read -r -a ACTOR_GPUS <<< "${GI_ACTOR_GPUS:-1 2 3}"
 
-mkdir -p "$ROOT/$RUN_DIR/logs" "$ROOT/$RUN_DIR/pids"
-PID_DIR="$ROOT/$RUN_DIR/pids"
+# 容器名前缀由 run 目录派生，不同 run 互不干扰
+TAG="gi_$(echo "$RUN_DIR" | tr '/.' '__')"
 
-stop_all() {
-  local stopped=0
-  for pidfile in "$PID_DIR"/*.pid; do
-    [ -e "$pidfile" ] || continue
-    local pid
-    pid="$(cat "$pidfile")"
-    if kill -0 "$pid" 2>/dev/null; then
-      echo "停止 $(basename "$pidfile" .pid) (pid $pid)"
-      kill "$pid" 2>/dev/null || true
-      stopped=$((stopped + 1))
-    fi
-    rm -f "$pidfile"
-  done
-  echo "已停止 $stopped 个进程。checkpoint 与分片都在磁盘上，重新启动即可续训。"
+mkdir -p "$ROOT/$RUN_DIR/logs"
+
+running_containers() {
+  docker ps --filter "name=^${TAG}_" --format '{{.Names}}'
 }
 
-if [ "$ACTION" = "stop" ]; then
-  stop_all
-  exit 0
-fi
-
-# 已经在跑就不要重复拉起
-for pidfile in "$PID_DIR"/*.pid; do
-  [ -e "$pidfile" ] || continue
-  if kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-    echo "已有进程在跑（$(basename "$pidfile" .pid)）。先执行 stop。"
-    exit 1
+stop_all() {
+  local names
+  names="$(docker ps -a --filter "name=^${TAG}_" --format '{{.Names}}')"
+  if [ -z "$names" ]; then
+    echo "没有属于 $RUN_DIR 的容器在跑。"
+    return
   fi
-done
+  echo "停止：$(echo "$names" | tr '\n' ' ')"
+  # shellcheck disable=SC2086
+  docker rm -f $names >/dev/null
+  echo "已停止。checkpoint 与分片都在磁盘上，重新启动即可续训。"
+}
+
+case "$ACTION" in
+  stop)
+    stop_all
+    exit 0
+    ;;
+  status)
+    echo "run-dir $RUN_DIR"
+    names="$(running_containers)"
+    if [ -z "$names" ]; then
+      echo "  没有容器在跑"
+    else
+      docker ps --filter "name=^${TAG}_" \
+        --format '  {{.Names}}  运行 {{.RunningFor}}  {{.Status}}'
+    fi
+    exit 0
+    ;;
+esac
+
+if [ -n "$(running_containers)" ]; then
+  echo "已有属于 $RUN_DIR 的容器在跑："
+  running_containers | sed 's/^/  /'
+  echo "先执行：$0 $RUN_DIR stop"
+  exit 1
+fi
 
 TOTAL_CORES="$(nproc)"
 # 给 trainer 留一部分核做数据整理，其余均分给 actor
@@ -72,9 +91,9 @@ launch() {
   local gpu="$1"; shift
   local log="$ROOT/$RUN_DIR/logs/${name}.log"
   echo "启动 $name（GPU $gpu）-> logs/${name}.log"
-  GI_GPUS="device=${gpu}" nohup "$ROOT/scripts/docker_run.sh" "$@" \
-    >>"$log" 2>&1 &
-  echo $! > "$PID_DIR/${name}.pid"
+  GI_GPUS="device=${gpu}" GI_NAME="${TAG}_${name}" \
+    nohup "$ROOT/scripts/docker_run.sh" "$@" >>"$log" 2>&1 &
+  disown
 }
 
 launch trainer "$TRAINER_GPU" \
@@ -101,8 +120,10 @@ for i in "${!ACTOR_GPUS[@]}"; do
       --device cuda
 done
 
+sleep 3
 echo
-echo "全部启动完毕。查看进度："
-echo "  tail -f $RUN_DIR/logs/actor0.log"
-echo "  python scripts/report.py --run-dir $RUN_DIR"
-echo "停止：./scripts/launch_training.sh $RUN_DIR stop"
+echo "在跑的容器："
+docker ps --filter "name=^${TAG}_" --format '  {{.Names}}' || true
+echo
+echo "查看进度：python scripts/report.py --run-dir $RUN_DIR"
+echo "停止：    $0 $RUN_DIR stop"

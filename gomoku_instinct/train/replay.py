@@ -338,7 +338,9 @@ class ReplayBuffer:
             for f in os.listdir(self.shard_dir)
             if f.endswith(".npz")
             and not f.endswith(".tmp.npz")
-            and f.split("_")[0] in prefixes
+            # 分片名形如 actor0_00000123.npz，前缀里带 actor 编号，
+            # 所以要用 startswith 匹配，不能拿 split("_")[0] 去比对
+            and any(f.startswith(p) for p in prefixes)
             and f not in self._seen_shards
         )
 

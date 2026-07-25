@@ -168,6 +168,44 @@ def test_shards_are_written_and_restorable(rules, tmp_path):
     assert len(restored) == 450
 
 
+def test_trainer_ingests_actor_shards(rules, tmp_path):
+    """多卡编排下 trainer 必须能扫到 actor 写出的分片。
+
+    分片名形如 actor0_00000123.npz —— 前缀带 actor 编号。这条曾经漏掉：
+    匹配写成了拿下划线切分后的首段去比对集合，`"actor0" in ("actor",)` 永远为假，
+    于是 trainer 扫了几小时一个分片都没吃进去，自博弈白跑。
+    这类 bug 不会报错，只会让训练步数一直停在 0。
+    """
+    shard_dir = str(tmp_path / "replay")
+
+    # 模拟两个 actor 各写出一批分片
+    for actor_id in (0, 1):
+        sink = ReplayBuffer(
+            5000, SIZE, shard_dir=shard_dir, shard_size=50,
+            shard_prefix=f"actor{actor_id}",
+        )
+        sink.add_from_drain(_fake_drain(100, seed=40 + actor_id), rules)
+        sink.flush()
+
+    trainer_buf = ReplayBuffer(5000, SIZE, shard_dir=shard_dir, shard_size=50)
+    ingested = trainer_buf.ingest_new_shards()
+    assert ingested == 200, f"只吃到 {ingested} 条，actor 分片没被扫到"
+    assert len(trainer_buf) == 200
+
+    # 同一个分片不能被重复吃进来
+    assert trainer_buf.ingest_new_shards() == 0
+
+
+def test_ingest_ignores_trainers_own_shards(rules, tmp_path):
+    """trainer 自己写的分片不该被再吃一遍，否则样本会翻倍。"""
+    shard_dir = str(tmp_path / "replay")
+    own = ReplayBuffer(5000, SIZE, shard_dir=shard_dir, shard_size=50)
+    own.add_from_drain(_fake_drain(100, seed=44), rules)
+    own.flush()
+
+    assert own.ingest_new_shards() == 0
+
+
 # ── 损失 ────────────────────────────────────────────────────────────────────
 
 
@@ -304,6 +342,41 @@ def test_checkpoint_restores_full_training_state(tmp_path):
     # 恢复后还能继续训练
     revived.train_step()
     assert revived.step == before_step + 1
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="需要 GPU")
+def test_checkpoint_roundtrip_on_gpu(tmp_path):
+    """GPU 上的存取续训。
+
+    这条曾经漏掉：CPU 上的续训测试全过，但在 GPU 上 torch.load 会把随机数状态
+    ByteTensor 一并搬到显存里，set_rng_state 直接拒收，续训在启动时就崩。
+    正式训练跑在 GPU 上，这条路径必须单独覆盖。
+    """
+    run_dir = str(tmp_path / "gpu_run")
+    cfg = TrainerConfig(
+        board_size=SIZE, num_games=4, selfplay_threads=2, sims=4, fast_sims=2,
+        full_search_prob=1.0, capacity=2000, min_positions_to_start=1,
+        shard_size=32, batch_size=8, compile=False,
+        selfplay_steps_per_cycle=120, max_train_steps_per_cycle=2,
+        target_sample_reuse=1000.0, label_workers=2,
+        checkpoint_every_seconds=1e9, checkpoint_every_steps=1_000_000,
+        resign_enabled=False, seed=99,
+    )
+    model_cfg = ModelConfig(size=SIZE, channels=16, blocks=2, attn_every=2)
+
+    trainer = Trainer(cfg, model_cfg, LossWeights(), run_dir, device="cuda")
+    for _ in range(6):
+        trainer.selfplay_cycle()
+    assert len(trainer.buffer) > 0
+    trainer.train_step()
+    trainer.save_checkpoint()
+
+    revived = Trainer(cfg, model_cfg, LossWeights(), run_dir, device="cuda")
+    assert revived.resume_or_start()
+    assert revived.step == trainer.step
+    revived.train_step()  # 恢复后还能继续训练
 
 
 @pytest.mark.slow

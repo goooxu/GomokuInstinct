@@ -8,6 +8,8 @@
 #   GI_IMAGE      容器镜像（默认 nvcr.io/nvidia/pytorch:26.06-py3）
 #   GI_GPUS       暴露给容器的 GPU（默认 all，可写 '"device=0,1"'）
 #   GI_AS_ROOT    设为 1 则以 root 运行（默认以当前用户运行，避免产生 root 属主文件）
+#   GI_NAME       给容器起名字。长任务必须起名 —— 杀掉 docker run 客户端进程
+#                 并不会停掉容器，只有 docker stop <名字> 才管用。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +49,10 @@ opts=(
 
 if [ "${GI_AS_ROOT:-0}" != "1" ]; then
   opts+=(-u "$(id -u):$(id -g)")
+fi
+
+if [ -n "${GI_NAME:-}" ]; then
+  opts+=(--name "$GI_NAME")
 fi
 
 # -i 始终要加：不加的话 docker 根本不会把 stdin 接进容器，

@@ -84,6 +84,8 @@ class TrainerConfig:
     # trainer 只扫描它们写出的分片。单卡跑通全链路时保持 False。
     external_selfplay: bool = False
     idle_sleep_seconds: float = 5.0
+    # 连续这么久一条样本都没吃到就告警：这种失败是静默的，训练步数会一直停在 0
+    idle_warn_seconds: float = 300.0
 
     # 容灾与日志
     checkpoint_every_seconds: float = 600.0
@@ -237,6 +239,9 @@ class Trainer:
         if self.cfg.external_selfplay and self.latest_checkpoint() is None:
             self.save_checkpoint()
 
+        last_ingest = time.time()
+        warned_idle = False
+
         while self.step < self.cfg.max_steps:
             if max_seconds is not None and time.time() - started > max_seconds:
                 break
@@ -244,9 +249,29 @@ class Trainer:
             added = self.selfplay_cycle()
             self.cycle += 1
 
-            if added == 0 and self.actor is None:
+            if added > 0:
+                last_ingest = time.time()
+                warned_idle = False
+            elif self.actor is None:
                 # actor 还没写出新分片，别空转烧 CPU
                 time.sleep(self.cfg.idle_sleep_seconds)
+                # 长时间一条样本都没吃到，多半是分片扫描出了问题，而不是 actor 慢。
+                # 这种情况会静默地让训练步数一直停在 0，必须主动喊出来。
+                idle = time.time() - last_ingest
+                if idle > self.cfg.idle_warn_seconds and not warned_idle:
+                    warned_idle = True
+                    shard_dir = os.path.join(self.run_dir, "replay")
+                    on_disk = (
+                        len([f for f in os.listdir(shard_dir) if f.endswith(".npz")])
+                        if os.path.isdir(shard_dir)
+                        else 0
+                    )
+                    print(
+                        f"[trainer] 警告：已连续 {idle / 60:.0f} 分钟没有吃到任何新样本，"
+                        f"而 replay 目录里有 {on_disk} 个分片。"
+                        "若分片数在增长却一直吃不到，说明分片扫描有问题。",
+                        flush=True,
+                    )
 
             if len(self.buffer) >= self.cfg.min_positions_to_start:
                 steps = self.train_steps_for_cycle()
@@ -371,7 +396,10 @@ class Trainer:
         if path is None:
             return False
 
-        state = torch.load(path, map_location=self.device, weights_only=False)
+        # 一律加载到 CPU：随机数状态是 ByteTensor，被搬到 GPU 上之后
+        # set_rng_state 会直接拒绝。模型与优化器各自的 load_state_dict
+        # 会把张量搬到正确的设备上，不需要在这里指定 map_location。
+        state = torch.load(path, map_location="cpu", weights_only=False)
         if state.get("version") != CHECKPOINT_VERSION:
             raise RuntimeError(f"checkpoint 版本不匹配: {state.get('version')}")
 
@@ -383,9 +411,20 @@ class Trainer:
         self.buffer.load_state_dict(state["buffer"])
 
         rng = state["rng"]
-        torch.set_rng_state(rng["torch"].cpu() if torch.is_tensor(rng["torch"]) else rng["torch"])
-        if rng.get("torch_cuda") is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(rng["torch_cuda"])
+        torch.set_rng_state(rng["torch"].cpu().to(torch.uint8))
+
+        cuda_state = rng.get("torch_cuda")
+        if cuda_state and torch.cuda.is_available():
+            states = [s.cpu().to(torch.uint8) for s in cuda_state]
+            if len(states) == torch.cuda.device_count():
+                torch.cuda.set_rng_state_all(states)
+            else:
+                # 换机后可见 GPU 数可能变了。随机数状态只影响可复现性，
+                # 不影响正确性，这里明确说明而不是静默跳过。
+                print(
+                    f"[trainer] 可见 GPU 数由 {len(states)} 变为 "
+                    f"{torch.cuda.device_count()}，跳过 CUDA 随机数状态恢复"
+                )
         self.rng.bit_generator.state = rng["numpy"]
         random.setstate(rng["python"])
         if self.actor is not None and rng.get("selfplay"):

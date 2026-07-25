@@ -127,6 +127,13 @@ class Trainer:
         self.core = load_core()
         self.rules = make_rules(rules_cfg)
 
+        # 必须在建模型**之前**播种：初始权重是随机初始化的产物，
+        # 播种放在后面的话每次启动的初始权重都不一样，整个 run 无法复现。
+        # 而且未训练网络的系统性偏向本身就随初始化而变（黑白胜率能差出几倍），
+        # 早期自博弈统计量因此完全不可比。
+        torch.manual_seed(cfg.seed)
+        random.seed(cfg.seed)
+
         # 主权重就是 BF16
         self.model = InstinctNet(model_cfg).to(self.device).to(torch.bfloat16)
         self.optimizer = build_optimizer(
@@ -170,9 +177,6 @@ class Trainer:
         self.rng = np.random.default_rng(cfg.seed)
         self._last_checkpoint_time = time.time()
         self._last_checkpoint_step = 0
-
-        torch.manual_seed(cfg.seed)
-        random.seed(cfg.seed)
 
     # ── 训练 ────────────────────────────────────────────────────────────────
     def train_step(self) -> dict[str, float]:

@@ -14,10 +14,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${GI_IMAGE:-nvcr.io/nvidia/pytorch:26.06-py3}"
 GPUS="${GI_GPUS:-all}"
 
-# HOME 与编译缓存都放进工作目录，保证容器可重复构建，且不往工作目录外写文件。
+# HOME 与各类编译缓存都放进工作目录，保证容器可重复构建，且不往工作目录之外写文件。
 CONTAINER_HOME="$ROOT/runs/.container_home"
 EXT_DIR="$ROOT/build/torch_extensions"
-mkdir -p "$CONTAINER_HOME" "$EXT_DIR"
+INDUCTOR_DIR="$ROOT/build/inductor_cache"
+TRITON_DIR="$ROOT/build/triton_cache"
+mkdir -p "$CONTAINER_HOME" "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR"
 
 opts=(
   --rm
@@ -32,7 +34,15 @@ opts=(
   -e PATH="$CONTAINER_HOME/.local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   -e PYTHONPATH="$ROOT"
   -e TORCH_EXTENSIONS_DIR="$EXT_DIR"
+  -e TORCHINDUCTOR_CACHE_DIR="$INDUCTOR_DIR"
+  -e TRITON_CACHE_DIR="$TRITON_DIR"
   -e PYTHONDONTWRITEBYTECODE=1
+  # 容器以宿主 uid 运行，而该 uid 在容器的 /etc/passwd 里没有条目，
+  # getpass.getuser() 会抛 KeyError，导致 torch._dynamo 首次导入失败、
+  # 重试时又撞上「重复注册」——torch.compile 与 torch.optim 都会被带塌。
+  # getpass 优先读这两个环境变量，给个固定名字即可绕开。
+  -e USER=gi
+  -e LOGNAME=gi
 )
 
 if [ "${GI_AS_ROOT:-0}" != "1" ]; then

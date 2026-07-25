@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gomoku-instinct"
+version = "0.1.0"
+description = "从零自博弈训练的连珠 AI，对战时仅靠单次网络前向落子，不使用任何搜索"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# torch 由运行容器提供（NGC PyTorch 镜像），这里不重复声明以免触发重装。
+dependencies = [
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-timeout>=2.2",
+]
+
+[project.scripts]
+gomoku-instinct = "gomoku_instinct.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["gomoku_instinct*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --timeout=1800"
+markers = [
+    "slow: 长时间运行的测试（差分测试全量、吞吐基准等）",
+    "gpu: 需要 GPU 的测试",
+]

@@ -1,0 +1,33 @@
+# 棋规配置。规则层是本项目唯一的知识来源，改动这里等于换了一个游戏。
+rules:
+  board_size: 15
+
+  # 连珠标准禁手（仅对黑方生效）
+  variant: renju
+
+  forbidden:
+    enabled: true
+    overline: true      # 长连（≥6）禁手
+    double_four: true   # 四四禁手
+    double_three: true  # 三三禁手
+
+    # 禁手点的处理语义：
+    #   lose    严格 RIF —— 禁手点仍是合法落子，黑方落上去立即判负
+    #   illegal 引擎常见做法 —— 禁手点直接从合法落子集中移除
+    semantics: lose
+
+    # 黑方同时成五与触发禁手时，五连优先判黑胜（RIF 标准）
+    five_overrides_forbidden: true
+
+    # 三三禁手中「活三」的递归判定深度上限。RIF 定义是递归的：
+    # 一个三只有在能一手成活四、且那一手本身不是禁手时才算活三。
+    recursion_depth: 8
+
+  # 白方无禁手，五连及以上（含长连）即胜
+  white_overline_wins: true
+
+  # 开局规则。目前只实现自由开局；接口预留，后续可加 Swap2 等。
+  opening: free
+
+  # 满盘且无人成五判和
+  draw_on_full_board: true

@@ -1,0 +1,47 @@
+# InstinctNet 默认规模。走「深而窄」：对战时没有搜索，网络深度就是唯一的前瞻深度。
+model:
+  name: instinct_net
+
+  channels: 128
+  blocks: 20
+
+  # 方向卷积分支：沿 横/竖/主对角/副对角 的 depthwise 1-D 卷积。
+  # 核长 9 = 五连窗口 ±4，一次覆盖一个点能参与的全部五连。
+  line_kernel: 9
+
+  # 3x3 局部形状分支的通道占比（其余给方向分支）
+  local_branch_ratio: 0.5
+
+  # 每隔 attn_every 个 block 插入一层轴向注意力（行/列/双对角）
+  attn_every: 4
+  attn_heads: 4
+
+  norm: rmsnorm
+  activation: gelu
+
+  # 全局门控（mean-pool -> MLP -> per-channel scale）的瓶颈压缩比
+  se_ratio: 0.25
+
+  # 输入平面数，与 gomoku_instinct/model/features.py 保持一致
+  input_planes: 10
+  history_planes: 4
+
+heads:
+  policy: true
+  value: true           # 三分类：胜/负/和
+  aux_threat: true      # 逐点棋型多标签（规则导出）
+  aux_forbidden: true   # 逐点黑方禁手点预测（规则导出）
+  aux_plies: true       # 剩余手数分桶
+  aux_reply: true       # 对手应手分布（来自 MCTS）
+
+loss_weights:
+  policy: 1.0
+  value: 1.0
+  aux_threat: 0.3
+  aux_forbidden: 0.3
+  aux_plies: 0.1
+  aux_reply: 0.2
+  # 辅助头是训练脚手架，后期按 schedule 衰减，避免占用主任务容量
+  aux_decay_start_step: 200000
+  aux_decay_end_step: 400000
+  aux_decay_final_scale: 0.1

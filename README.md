@@ -40,6 +40,28 @@ python scripts/check_env.py
 pytest tests/
 ```
 
+## 训练
+
+多卡编排：一张卡跑 trainer，其余卡各跑一个自博弈 actor。
+
+```bash
+./scripts/launch_training.sh runs/renju15          # 启动（已有进度则自动续训）
+python scripts/report.py --run-dir runs/renju15    # 看进展
+python scripts/report.py --run-dir runs/renju15 --arena 200   # 顺带跑一轮竞技场
+./scripts/launch_training.sh runs/renju15 stop     # 停止
+```
+
+actor 与 trainer 之间只通过文件系统交互：actor 定期热加载 `checkpoints/latest`，
+把样本写成分片；trainer 扫描新分片并训练。分片与 checkpoint 都是原子写入，
+因此任一侧崩掉或整机被抢占，重启后都能从磁盘上的最新状态原地接上。
+
+单卡跑通全链路（用于快速验证）：
+
+```bash
+python scripts/train.py --run-dir runs/dev9 --board-size 9 \
+    --override num_games=512 sims=96 batch_size=512 min_positions_to_start=3000
+```
+
 ## 人机对战
 
 ```bash

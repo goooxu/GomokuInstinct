@@ -164,9 +164,11 @@ def main() -> int:
             if games == 0:
                 rates = "（尚无完成的对局）"
             else:
+                # 黑白和三项都打出来：连珠规则不对称（黑必须恰好五连、还有禁手约束），
+                # 只看黑胜率分不清「黑方在输」和「大量和棋」。
                 rates = (
                     f"{stats['moves'] / games:.0f} 手/局  "
-                    f"黑胜率 {stats['black_wins'] / games:.1%}  "
+                    f"黑{stats['black_wins']}/白{stats['white_wins']}/和{stats['draws']}  "
                     f"禁手告负 {stats['forbidden_losses'] / games:.2%}"
                 )
             print(

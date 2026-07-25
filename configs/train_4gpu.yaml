@@ -44,9 +44,12 @@ selfplay:
     final: 0.0
 
   resign:
-    enabled: true
+    # 训练初期关闭。随机初始化的价值头没有任何判断力，此时认输就是在瞎判，
+    # 会让训练数据里的价值目标整体走样。价值头训出准度后再打开，
+    # 打开时务必盯住 audit 出来的误判率。
+    enabled: false
     threshold: -0.92
-    # 保留一部分不认输的对局用于审计认输误判率，误判过高则自动收紧阈值
+    # 保留一部分不认输的对局用于审计认输误判率
     audit_fraction: 0.05
     max_false_positive_rate: 0.02
 

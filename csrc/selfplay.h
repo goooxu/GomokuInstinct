@@ -60,7 +60,8 @@ struct SelfPlayConfig {
 
 struct Stats {
   int64_t games = 0;
-  int64_t moves = 0;
+  int64_t moves = 0;          // 所有落子，含仍在进行中的对局
+  int64_t completed_plies = 0;  // 仅已完成对局的手数
   int64_t samples = 0;
   int64_t black_wins = 0;
   int64_t white_wins = 0;

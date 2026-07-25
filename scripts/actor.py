@@ -167,9 +167,13 @@ def main() -> int:
                 # 黑白和三项都打出来：连珠规则不对称（黑必须恰好五连、还有禁手约束），
                 # 只看黑胜率分不清「黑方在输」和「大量和棋」。
                 rates = (
-                    f"{stats['moves'] / games:.0f} 手/局  "
+                    f"{stats['completed_plies'] / games:.0f} 手/局  "
                     f"黑{stats['black_wins']}/白{stats['white_wins']}/和{stats['draws']}  "
-                    f"禁手告负 {stats['forbidden_losses'] / games:.2%}"
+                    f"禁手告负 {stats['forbidden_losses'] / games:.2%}  "
+                    # 认输误判率必须盯着：价值头没训起来之前认输就是在瞎判，
+                    # 会让训练数据里的价值目标整体走样
+                    f"认输 {stats['resigns'] / games:.1%}"
+                    f"(误判 {stats['resign_false_positives'] / max(1, stats['resign_audits']):.1%})"
                 )
             print(
                 f"[{prefix}] 局 {games:,}  手 {stats['moves']:,}  "

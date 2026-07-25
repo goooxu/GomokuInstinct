@@ -52,6 +52,10 @@ def main() -> int:
     ap.add_argument("--blocks", type=int, default=20)
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--no-compile", action="store_true")
+    ap.add_argument("--raw-policy-fraction", type=float, default=0.0,
+                    help="部署分布自博弈比例（这些局由零搜索策略落子）")
+    ap.add_argument("--resign", action="store_true", help="开启认输")
+    ap.add_argument("--label", default="", help="输出前缀，便于并排对比")
     args = ap.parse_args()
 
     if not torch.cuda.is_available():
@@ -75,6 +79,8 @@ def main() -> int:
         sims=args.sims,
         fast_sims=args.fast_sims,
         full_search_prob=args.full_search_prob,
+        raw_policy_fraction=args.raw_policy_fraction,
+        resign_enabled=args.resign,
         num_threads=args.threads,
         seed=20260725,
     )
@@ -106,7 +112,8 @@ def main() -> int:
     # 上千局同时推进，单局要跑很久才结束；测得时间短时「局/s」严重失真，
     # 稳态产量应当由「手/s ÷ 平均每局手数」推算。
     if stats["games"] >= 20:
-        avg_plies = stats["moves"] / stats["games"]
+        # 必须用已完成对局的手数：stats['moves'] 含在飞对局，会把均值抬高好几倍
+        avg_plies = stats["completed_plies"] / stats["games"]
         print(f"完成对局   {stats['games'] / elapsed:>12,.2f} 局/s "
               f"（平均 {avg_plies:.0f} 手/局，{stats['games'] / elapsed * 86400:,.0f} 局/天）")
         print(f"训练样本   {stats['samples'] / elapsed:>12,.1f} 条/s")
@@ -126,7 +133,7 @@ def main() -> int:
     else:
         print("  -> 两侧较为均衡")
     print()
-    print(f"黑胜 {stats['black_wins']}  白胜 {stats['white_wins']}  "
+    print(f"{args.label}黑胜 {stats['black_wins']}  白胜 {stats['white_wins']}  "
           f"和 {stats['draws']}  禁手告负 {stats['forbidden_losses']}")
     return 0
 

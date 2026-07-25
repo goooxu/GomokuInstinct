@@ -314,6 +314,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             py::dict out;
             out["games"] = s.games;
             out["moves"] = s.moves;
+            out["completed_plies"] = s.completed_plies;
             out["samples"] = s.samples;
             out["black_wins"] = s.black_wins;
             out["white_wins"] = s.white_wins;

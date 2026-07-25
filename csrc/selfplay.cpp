@@ -353,6 +353,7 @@ void SelfPlayRunner::finish_game(Slot& slot, Outcome outcome, bool by_resign) {
   slot.pending.clear();
 
   slot.stats.games += 1;
+  slot.stats.completed_plies += total_plies;
   if (outcome == Outcome::BLACK_WIN) slot.stats.black_wins += 1;
   else if (outcome == Outcome::WHITE_WIN) slot.stats.white_wins += 1;
   else slot.stats.draws += 1;
@@ -413,6 +414,7 @@ Stats SelfPlayRunner::stats() const {
   for (const Slot& slot : slots_) {
     total.games += slot.stats.games;
     total.moves += slot.stats.moves;
+    total.completed_plies += slot.stats.completed_plies;
     total.samples += slot.stats.samples;
     total.black_wins += slot.stats.black_wins;
     total.white_wins += slot.stats.white_wins;

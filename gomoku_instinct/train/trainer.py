@@ -279,7 +279,7 @@ class Trainer:
         base.update(
             {
                 "selfplay/games": stats["games"],
-                "selfplay/plies_per_game": stats["moves"] / games,
+                "selfplay/plies_per_game": stats["completed_plies"] / games,
                 "selfplay/black_win_rate": stats["black_wins"] / games,
                 "selfplay/forbidden_loss_rate": stats["forbidden_losses"] / games,
                 "selfplay/resign_false_positive_rate": (

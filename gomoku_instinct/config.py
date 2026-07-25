@@ -78,6 +78,7 @@ def trainer_config_from(cfg: dict, **overrides):
         target_sample_reuse=train.get("target_sample_reuse", 4.0),
         max_train_steps_per_cycle=train.get("max_train_steps_per_cycle", 400),
         selfplay_steps_per_cycle=train.get("selfplay_steps_per_cycle", 200),
+        external_selfplay=train.get("external_selfplay", False),
         lr=optim.get("lr", 2e-3),
         grad_clip=optim.get("grad_clip", 1.0),
         warmup_steps=schedule.get("warmup_steps", 2_000),

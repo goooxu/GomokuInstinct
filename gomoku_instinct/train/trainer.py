@@ -80,6 +80,11 @@ class TrainerConfig:
     target_sample_reuse: float = 4.0
     max_train_steps_per_cycle: int = 400
 
+    # 多卡编排：自博弈交给独立的 actor 进程（各占一张 GPU），
+    # trainer 只扫描它们写出的分片。单卡跑通全链路时保持 False。
+    external_selfplay: bool = False
+    idle_sleep_seconds: float = 5.0
+
     # 容灾与日志
     checkpoint_every_seconds: float = 600.0
     checkpoint_every_steps: int = 10_000
@@ -138,7 +143,7 @@ class Trainer:
             label_workers=cfg.label_workers,
         )
 
-        self.actor = SelfPlayActor(
+        self.actor = None if cfg.external_selfplay else SelfPlayActor(
             ModelEvaluator(self.forward, cfg.board_size, self.device),
             board_size=cfg.board_size,
             num_games=cfg.num_games,
@@ -201,6 +206,9 @@ class Trainer:
         return metrics
 
     def selfplay_cycle(self) -> int:
+        if self.actor is None:
+            # 多卡模式：自博弈在独立进程里跑，这里只管把新分片吃进来
+            return self.buffer.ingest_new_shards()
         self.model.eval()
         self.actor.run(self.cfg.selfplay_steps_per_cycle)
         added = self.buffer.add_from_drain(self.actor.drain(), self.rules)
@@ -225,12 +233,20 @@ class Trainer:
         started = time.time()
         log_path = os.path.join(self.run_dir, "logs", "metrics.jsonl")
 
+        # 多卡模式下 actor 要等第一个 checkpoint 才能起步，所以先落一个。
+        if self.cfg.external_selfplay and self.latest_checkpoint() is None:
+            self.save_checkpoint()
+
         while self.step < self.cfg.max_steps:
             if max_seconds is not None and time.time() - started > max_seconds:
                 break
 
             added = self.selfplay_cycle()
             self.cycle += 1
+
+            if added == 0 and self.actor is None:
+                # actor 还没写出新分片，别空转烧 CPU
+                time.sleep(self.cfg.idle_sleep_seconds)
 
             if len(self.buffer) >= self.cfg.min_positions_to_start:
                 steps = self.train_steps_for_cycle()
@@ -247,24 +263,31 @@ class Trainer:
         self.save_checkpoint()
 
     def _context_metrics(self, added: int) -> dict[str, float]:
-        stats = self.actor.stats
-        games = max(1, stats["games"])
-        return {
+        base = {
             "step": self.step,
             "buffer/size": len(self.buffer),
             "buffer/total_added": self.buffer.total_added,
-            # 样本复用率：每条样本平均被训练了多少次。太高会过拟合，太低是浪费算力。
             "buffer/reuse": self.samples_seen / max(1, self.buffer.total_added),
             "selfplay/added_last_cycle": added,
-            "selfplay/games": stats["games"],
-            "selfplay/plies_per_game": stats["moves"] / games,
-            "selfplay/black_win_rate": stats["black_wins"] / games,
-            "selfplay/forbidden_loss_rate": stats["forbidden_losses"] / games,
-            "selfplay/resign_false_positive_rate": (
-                stats["resign_false_positives"] / max(1, stats["resign_audits"])
-            ),
             "optim/compensation_norm": self.optimizer.compensation_norm(),
         }
+        if self.actor is None:
+            return base
+
+        stats = self.actor.stats
+        games = max(1, stats["games"])
+        base.update(
+            {
+                "selfplay/games": stats["games"],
+                "selfplay/plies_per_game": stats["moves"] / games,
+                "selfplay/black_win_rate": stats["black_wins"] / games,
+                "selfplay/forbidden_loss_rate": stats["forbidden_losses"] / games,
+                "selfplay/resign_false_positive_rate": (
+                    stats["resign_false_positives"] / max(1, stats["resign_audits"])
+                ),
+            }
+        )
+        return base
 
     @staticmethod
     def _log(path: str, metrics: dict) -> None:
@@ -305,7 +328,8 @@ class Trainer:
                 ),
                 "numpy": self.rng.bit_generator.state,
                 "python": random.getstate(),
-                "selfplay": self.actor.rng_state(),
+                # 多卡模式下自博弈在独立进程里，各自维护自己的随机流
+                "selfplay": self.actor.rng_state() if self.actor is not None else [],
             },
         }
 
@@ -364,7 +388,8 @@ class Trainer:
             torch.cuda.set_rng_state_all(rng["torch_cuda"])
         self.rng.bit_generator.state = rng["numpy"]
         random.setstate(rng["python"])
-        self.actor.set_rng_state(rng["selfplay"])
+        if self.actor is not None and rng.get("selfplay"):
+            self.actor.set_rng_state(rng["selfplay"])
 
         restored = self.buffer.restore_from_shards()
         self._last_checkpoint_time = time.time()

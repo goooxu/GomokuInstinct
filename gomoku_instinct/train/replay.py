@@ -119,6 +119,7 @@ class ReplayBuffer:
         shard_size: int = 65536,
         keep_shards: int = 400,
         label_workers: int = 8,
+        shard_prefix: str = "shard",
     ) -> None:
         self.capacity = capacity
         self.board_size = board_size
@@ -127,6 +128,9 @@ class ReplayBuffer:
         self.shard_size = shard_size
         self.keep_shards = keep_shards
         self.label_workers = label_workers
+        # 多个 actor 进程共写一个目录时，各自用不同前缀避免撞名
+        self.shard_prefix = shard_prefix
+        self._seen_shards: set[str] = set()
 
         self.size = 0
         self.cursor = 0
@@ -289,7 +293,7 @@ class ReplayBuffer:
             key: np.concatenate([p[key] for p in self._pending], axis=0)
             for key in _FIELDS
         }
-        name = f"shard_{self._shard_index:08d}.npz"
+        name = f"{self.shard_prefix}_{self._shard_index:08d}.npz"
         path = os.path.join(self.shard_dir, name)
         # 先写临时文件再 rename：中断时不会留下半截分片被续训读到。
         tmp = path + ".tmp.npz"
@@ -309,7 +313,9 @@ class ReplayBuffer:
         if not self.shard_dir or self.keep_shards <= 0:
             return
         shards = sorted(
-            f for f in os.listdir(self.shard_dir) if f.startswith("shard_")
+            f
+            for f in os.listdir(self.shard_dir)
+            if f.startswith(self.shard_prefix + "_")
         )
         for name in shards[: max(0, len(shards) - self.keep_shards)]:
             try:
@@ -317,16 +323,56 @@ class ReplayBuffer:
             except OSError:
                 pass
 
+    def ingest_new_shards(self, prefixes: tuple[str, ...] = ("actor",)) -> int:
+        """装入外部 actor 进程新写出来的分片。
+
+        多卡编排下 actor 各自独占一张 GPU 跑自博弈、把样本写成分片；
+        trainer 只管扫描新分片并入库。分片是原子 rename 出来的，
+        因此扫到的一定是完整文件，不需要额外的握手协议。
+        """
+        if not self.shard_dir or not os.path.isdir(self.shard_dir):
+            return 0
+
+        candidates = sorted(
+            f
+            for f in os.listdir(self.shard_dir)
+            if f.endswith(".npz")
+            and not f.endswith(".tmp.npz")
+            and f.split("_")[0] in prefixes
+            and f not in self._seen_shards
+        )
+
+        loaded = 0
+        for name in candidates:
+            path = os.path.join(self.shard_dir, name)
+            try:
+                with np.load(path) as data:
+                    chunk = {key: data[key] for key in _FIELDS}
+            except (OSError, ValueError, KeyError):
+                continue  # 还没写完或已被回收，下轮再看
+            self._seen_shards.add(name)
+            # 入库但不再重复落盘 —— 分片已经在磁盘上了
+            shard_dir, self.shard_dir = self.shard_dir, None
+            self.add(chunk)
+            self.shard_dir = shard_dir
+            loaded += chunk["boards"].shape[0]
+        return loaded
+
     def restore_from_shards(self) -> int:
         """续训时按时间倒序装回最近的分片，直到填满窗口。"""
         if not self.shard_dir or not os.path.isdir(self.shard_dir):
             return 0
+        # 续训时把所有分片（自身的与各 actor 的）都算上
         shards = sorted(
-            f for f in os.listdir(self.shard_dir) if f.startswith("shard_")
+            f
+            for f in os.listdir(self.shard_dir)
+            if f.endswith(".npz") and not f.endswith(".tmp.npz")
         )
         if not shards:
             return 0
-        self._shard_index = int(shards[-1][6:14]) + 1
+        own = [f for f in shards if f.startswith(self.shard_prefix + "_")]
+        if own:
+            self._shard_index = int(own[-1].rsplit("_", 1)[1][:8]) + 1
 
         # total_added 统计的是「历史上一共产出过多少样本」，用于算样本复用率；
         # 从磁盘装回来不是新产出，不能重复计数。
@@ -347,6 +393,8 @@ class ReplayBuffer:
             self.shard_dir = shard_dir
             loaded += chunk["boards"].shape[0]
 
+        # 已经装回来的分片不该再被 ingest_new_shards 重复吃一遍
+        self._seen_shards.update(shards)
         self.total_added = produced
         return min(loaded, self.capacity)
 

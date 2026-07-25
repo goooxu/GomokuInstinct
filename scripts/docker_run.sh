@@ -29,6 +29,7 @@ opts=(
   -v "$ROOT:$ROOT"
   -w "$ROOT"
   -e HOME="$CONTAINER_HOME"
+  -e PATH="$CONTAINER_HOME/.local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   -e PYTHONPATH="$ROOT"
   -e TORCH_EXTENSIONS_DIR="$EXT_DIR"
   -e PYTHONDONTWRITEBYTECODE=1

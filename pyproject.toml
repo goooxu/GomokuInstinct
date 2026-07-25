@@ -30,7 +30,7 @@ include = ["gomoku_instinct*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --timeout=1800"
+addopts = "-q"
 markers = [
     "slow: 长时间运行的测试（差分测试全量、吞吐基准等）",
     "gpu: 需要 GPU 的测试",

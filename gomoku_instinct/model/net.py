@@ -24,6 +24,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .blocks import DirectionalLineBlock, GlobalAttention, RMSNorm2d
+from ..rules.constants import NUM_LEVELS
 from .features import NUM_PLANES
 
 
@@ -39,7 +40,7 @@ class ModelConfig:
     expansion: float = 1.0
     input_planes: int = NUM_PLANES
 
-    threat_levels: int = 8  # 与 rules.constants.Level 的取值个数一致
+    threat_levels: int = NUM_LEVELS  # 与 rules.constants.Level 一致
     plies_buckets: int = 16
 
     use_threat_head: bool = True

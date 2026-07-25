@@ -1,4 +1,5 @@
 // pybind11 绑定。pybind11 头文件由 PyTorch 自带，因此不引入额外依赖。
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -8,9 +9,14 @@
 #include <vector>
 
 #include "constants.h"
+#include "position.h"
 #include "renju.h"
+#include "selfplay.h"
 
 namespace py = pybind11;
+
+template <typename T>
+using Array = py::array_t<T, py::array::c_style | py::array::forcecast>;
 
 namespace {
 
@@ -115,6 +121,24 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "全盘黑方禁手点标记，返回长度 size*size 的字节串")
 
       .def(
+          "pattern_map",
+          [](const gi::Rules& self, const py::buffer& grid, int size, int color) {
+            check_size(size);
+            const int n = size * size;
+            GridBuffer buf(grid, n);
+            std::vector<uint8_t> out(static_cast<size_t>(n));
+            {
+              py::gil_scoped_release release;
+              self.pattern_map(buf.ptr, size, static_cast<uint8_t>(color),
+                               out.data());
+            }
+            return py::bytes(reinterpret_cast<const char*>(out.data()),
+                             static_cast<size_t>(n));
+          },
+          py::arg("grid"), py::arg("size"), py::arg("color"),
+          "逐点棋型标注，返回长度 size*size 的字节串，取值为 Level")
+
+      .def(
           "judge_all",
           [](const gi::Rules& self, const py::buffer& grid, int size, int color) {
             check_size(size);
@@ -137,4 +161,171 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_property_readonly("depth_exceeded", &gi::Rules::depth_exceeded)
       .def_property_readonly("max_depth", &gi::Rules::max_depth)
       .def("reset_counters", &gi::Rules::reset_counters);
+
+  // ── 向量化自博弈 ─────────────────────────────────────────────────────────
+  py::class_<gi::SelfPlayRunner>(m, "SelfPlayRunner")
+      .def(py::init([](int board_size, int num_games, int sims, int fast_sims,
+                       float full_search_prob, float c_puct, float fpu_reduction,
+                       float dirichlet_alpha, float dirichlet_eps,
+                       float temperature, int temperature_moves,
+                       float raw_policy_fraction, bool resign_enabled,
+                       float resign_threshold, float resign_audit_fraction,
+                       int num_threads, uint64_t seed, int forbidden_semantics,
+                       bool forbidden_enabled, int recursion_depth) {
+             gi::SelfPlayConfig cfg;
+             cfg.board_size = board_size;
+             cfg.num_games = num_games;
+             cfg.sims = sims;
+             cfg.fast_sims = fast_sims;
+             cfg.full_search_prob = full_search_prob;
+             cfg.dirichlet_alpha = dirichlet_alpha;
+             cfg.dirichlet_eps = dirichlet_eps;
+             cfg.temperature = temperature;
+             cfg.temperature_moves = temperature_moves;
+             cfg.raw_policy_fraction = raw_policy_fraction;
+             cfg.resign_enabled = resign_enabled;
+             cfg.resign_threshold = resign_threshold;
+             cfg.resign_audit_fraction = resign_audit_fraction;
+             cfg.num_threads = num_threads;
+             cfg.seed = seed;
+             cfg.semantics =
+                 static_cast<gi::ForbiddenSemantics>(forbidden_semantics);
+             cfg.mcts.c_puct = c_puct;
+             cfg.mcts.fpu_reduction = fpu_reduction;
+             cfg.rules.forbidden_enabled = forbidden_enabled;
+             cfg.rules.recursion_depth = recursion_depth;
+             return new gi::SelfPlayRunner(cfg);
+           }),
+           py::arg("board_size") = 15, py::arg("num_games") = 1024,
+           py::arg("sims") = 400, py::arg("fast_sims") = 100,
+           py::arg("full_search_prob") = 0.25f, py::arg("c_puct") = 1.6f,
+           py::arg("fpu_reduction") = 0.25f, py::arg("dirichlet_alpha") = 0.15f,
+           py::arg("dirichlet_eps") = 0.25f, py::arg("temperature") = 1.0f,
+           py::arg("temperature_moves") = 16,
+           py::arg("raw_policy_fraction") = 0.0f,
+           py::arg("resign_enabled") = true,
+           py::arg("resign_threshold") = -0.92f,
+           py::arg("resign_audit_fraction") = 0.05f,
+           py::arg("num_threads") = 8, py::arg("seed") = 20260725ULL,
+           py::arg("forbidden_semantics") = 0,
+           py::arg("forbidden_enabled") = true,
+           py::arg("recursion_depth") = 64)
+
+      .def_property_readonly("num_games", &gi::SelfPlayRunner::num_games)
+      .def_property_readonly("num_cells", &gi::SelfPlayRunner::num_cells)
+
+      .def(
+          "collect",
+          [](gi::SelfPlayRunner& self, Array<uint8_t> boards,
+             Array<uint8_t> to_move, Array<int32_t> history,
+             Array<int32_t> move_number, Array<uint8_t> needs_eval) {
+            const int g = self.num_games();
+            const int n = self.num_cells();
+            if (boards.size() < static_cast<py::ssize_t>(g) * n ||
+                to_move.size() < g || history.size() < g * gi::HISTORY_PLANES ||
+                move_number.size() < g || needs_eval.size() < g) {
+              throw std::invalid_argument("collect 的输出缓冲区尺寸不足");
+            }
+            uint8_t* pb = boards.mutable_data();
+            uint8_t* pt = to_move.mutable_data();
+            int32_t* ph = history.mutable_data();
+            int32_t* pm = move_number.mutable_data();
+            uint8_t* pn = needs_eval.mutable_data();
+            py::gil_scoped_release release;
+            self.collect(pb, pt, ph, pm, pn);
+          },
+          py::arg("boards"), py::arg("to_move"), py::arg("history"),
+          py::arg("move_number"), py::arg("needs_eval"),
+          "每局从根下潜一次，把待评估局面写进给定缓冲区")
+
+      .def(
+          "apply",
+          [](gi::SelfPlayRunner& self, Array<float> policy, Array<float> value) {
+            const int g = self.num_games();
+            const int n = self.num_cells();
+            if (policy.size() < static_cast<py::ssize_t>(g) * n ||
+                value.size() < g) {
+              throw std::invalid_argument("apply 的输入缓冲区尺寸不足");
+            }
+            const float* pp = policy.data();
+            const float* pv = value.data();
+            py::gil_scoped_release release;
+            self.apply(pp, pv);
+          },
+          py::arg("policy"), py::arg("value"),
+          "回填评估结果：展开叶子、回传价值，搜索次数够了就落子")
+
+      .def_property_readonly("pending_samples",
+                             &gi::SelfPlayRunner::pending_samples)
+
+      .def(
+          "drain",
+          [](gi::SelfPlayRunner& self, int max_samples) {
+            const int n = self.num_cells();
+            const int count = std::min(max_samples, self.pending_samples());
+
+            Array<uint8_t> boards({count, n});
+            Array<float> policy({count, n});
+            Array<uint8_t> to_move({count});
+            Array<int32_t> history({count, gi::HISTORY_PLANES});
+            Array<int32_t> move_number({count});
+            Array<float> value({count});
+            Array<int32_t> plies({count});
+            Array<int32_t> next_move({count});
+            Array<float> root_value({count});
+            Array<uint8_t> searched({count});
+
+            int written = 0;
+            if (count > 0) {
+              uint8_t* pb = boards.mutable_data();
+              float* pp = policy.mutable_data();
+              uint8_t* pt = to_move.mutable_data();
+              int32_t* ph = history.mutable_data();
+              int32_t* pm = move_number.mutable_data();
+              float* pv = value.mutable_data();
+              int32_t* pl = plies.mutable_data();
+              int32_t* pnm = next_move.mutable_data();
+              float* prv = root_value.mutable_data();
+              uint8_t* ps = searched.mutable_data();
+              py::gil_scoped_release release;
+              written = self.drain(count, pb, pt, ph, pm, pp, pv, pl, pnm, prv, ps);
+            }
+
+            py::dict out;
+            out["count"] = written;
+            out["boards"] = boards;
+            out["policy"] = policy;
+            out["to_move"] = to_move;
+            out["history"] = history;
+            out["move_number"] = move_number;
+            out["value"] = value;
+            out["plies_remaining"] = plies;
+            out["next_move"] = next_move;
+            out["root_value"] = root_value;
+            out["searched"] = searched;
+            return out;
+          },
+          py::arg("max_samples"), "取出已完成对局的样本并清空队列")
+
+      .def_property_readonly(
+          "stats",
+          [](const gi::SelfPlayRunner& self) {
+            const gi::Stats s = self.stats();
+            py::dict out;
+            out["games"] = s.games;
+            out["moves"] = s.moves;
+            out["samples"] = s.samples;
+            out["black_wins"] = s.black_wins;
+            out["white_wins"] = s.white_wins;
+            out["draws"] = s.draws;
+            out["forbidden_losses"] = s.forbidden_losses;
+            out["resigns"] = s.resigns;
+            out["resign_audits"] = s.resign_audits;
+            out["resign_false_positives"] = s.resign_false_positives;
+            out["raw_policy_games"] = s.raw_policy_games;
+            return out;
+          })
+      .def("reset_stats", &gi::SelfPlayRunner::reset_stats)
+      .def("rng_state", &gi::SelfPlayRunner::rng_state)
+      .def("set_rng_state", &gi::SelfPlayRunner::set_rng_state);
 }

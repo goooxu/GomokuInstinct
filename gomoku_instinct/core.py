@@ -20,7 +20,7 @@ _CORE = None
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CSRC = os.path.join(_REPO_ROOT, "csrc")
 
-_SOURCES = ["geometry.cpp", "renju.cpp", "bindings.cpp"]
+_SOURCES = ["geometry.cpp", "renju.cpp", "mcts.cpp", "selfplay.cpp", "bindings.cpp"]
 
 _BASE_CFLAGS = ["-O3", "-std=c++17", "-fvisibility=hidden", "-DNDEBUG"]
 

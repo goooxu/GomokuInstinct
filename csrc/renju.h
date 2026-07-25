@@ -22,6 +22,11 @@ class Rules {
   // 全盘黑方禁手点标记；out 长度 size*size，非空点写 0。
   void forbidden_map(const uint8_t* grid, int size, uint8_t* out) const;
 
+  // 逐点棋型标注：out[i] 为 color 在空点 i 落子后能形成的最高棋型等级（Level）。
+  // 非空点写 0。这是辅助监督头的标签来源，全部由规则导出，不含任何棋谱知识。
+  void pattern_map(const uint8_t* grid, int size, uint8_t color,
+                   uint8_t* out) const;
+
   // 逐点判定；out 长度 5*size*size，每格依次为
   // [outcome, forbidden, fours, open_threes, longest_run]，非空点全部填 255。
   void judge_all(const uint8_t* grid, int size, uint8_t color, uint8_t* out) const;

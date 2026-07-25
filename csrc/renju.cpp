@@ -96,7 +96,68 @@ inline int count_fours(uint32_t own, uint32_t blocked, int len, int pos,
   return nkeys;
 }
 
+// 某个方向上、落子之后形成的最高棋型等级。
+//
+// 「活三」在这里用非递归判定（只看本方向能否一手成活四）：它是特征标签而非规则判定，
+// 精确的三三禁手仍由 has_open_three 的递归版本负责。
+uint8_t level_in_direction(uint32_t own, uint32_t blocked, int len, int pos,
+                           bool black) {
+  const int run = run_length(own, len, pos);
+  if (run >= 6) {
+    return static_cast<uint8_t>(black ? Level::OVERLINE : Level::FIVE);
+  }
+  if (run == 5) return static_cast<uint8_t>(Level::FIVE);
+
+  const bool exact = black;  // 黑方必须恰好五连
+  bool open_four = false;
+  const int fours = count_fours(own, blocked, len, pos, exact, &open_four);
+  if (fours > 0) {
+    return static_cast<uint8_t>(open_four ? Level::OPEN_FOUR : Level::FOUR);
+  }
+
+  // 试探邻近空点：能一手成活四即为活三；只能成四则为眠三。
+  bool can_make_four = false;
+  const int lo = pos - 4 < 0 ? 0 : pos - 4;
+  const int hi = pos + 4 >= len ? len - 1 : pos + 4;
+  for (int p = lo; p <= hi; ++p) {
+    const uint32_t bit = 1u << p;
+    if ((own & bit) || (blocked & bit)) continue;
+    const uint32_t own2 = own | bit;
+    if (run_length(own2, len, p) >= 5) continue;  // 那是四，不是三
+    bool o4 = false;
+    const int f = count_fours(own2, blocked, len, p, exact, &o4);
+    if (o4) return static_cast<uint8_t>(Level::OPEN_THREE);
+    if (f > 0) can_make_four = true;
+  }
+  return static_cast<uint8_t>(can_make_four ? Level::CLOSED_THREE : Level::NONE);
+}
+
 }  // namespace
+
+void Rules::pattern_map(const uint8_t* grid, int size, uint8_t color,
+                        uint8_t* out) const {
+  const int n = size * size;
+  std::memset(out, 0, static_cast<size_t>(n));
+
+  uint8_t buf[MAX_SIZE * MAX_SIZE];
+  std::memcpy(buf, grid, static_cast<size_t>(n));
+  const Geometry& g = geometry(size);
+  const bool black = (color == BLACK);
+
+  for (int i = 0; i < n; ++i) {
+    if (buf[i] != EMPTY) continue;
+    buf[i] = color;
+    uint8_t best = 0;
+    for (int d = 0; d < NUM_DIRS; ++d) {
+      const LineView lv = make_line(buf, g, i, d, color);
+      const uint8_t level =
+          level_in_direction(lv.own, lv.blocked, lv.len, lv.pos, black);
+      if (level > best) best = level;
+    }
+    buf[i] = EMPTY;
+    out[i] = best;
+  }
+}
 
 Judgment Rules::judge_placed(uint8_t* grid, int size, int move, uint8_t color,
                              int depth) const {

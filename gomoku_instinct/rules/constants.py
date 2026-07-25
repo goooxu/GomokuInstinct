@@ -59,19 +59,26 @@ class Forbidden(IntEnum):
 
 
 class Level(IntEnum):
-    """某个方向上一手棋所形成棋型的等级，用于辅助监督标签。
+    """某个空点落子后能形成的最高棋型等级，用作辅助监督标签。
 
     按「最高等级」归类：一个方向若已成四，就不再计作三。
+    取值必须与 csrc/constants.h 的 Level 一致。
+
+    注意这里的「活三」用的是**非递归**判定（只看能否一手成活四），
+    与三三禁手里那个递归定义不同 —— 它只是个特征标签，不参与规则判定；
+    精确的禁手规则由单独的 forbidden 头去学。
     """
 
     NONE = 0
-    TWO = 1            # 活二：再一手可成活三
-    CLOSED_THREE = 2   # 眠三：再一手可成四，但成不了活四
-    OPEN_THREE = 3     # 活三：再一手可成活四
-    FOUR = 4           # 冲四：再一手可成五，且只有一个成五点
-    OPEN_FOUR = 5      # 活四：两个成五点
-    FIVE = 6           # 五连
-    OVERLINE = 7       # 长连（≥6）
+    CLOSED_THREE = 1   # 眠三：再一手可成四，但成不了活四
+    OPEN_THREE = 2     # 活三：再一手可成活四
+    FOUR = 3           # 冲四：只有一个成五点
+    OPEN_FOUR = 4      # 活四：两个成五点
+    FIVE = 5           # 五连
+    OVERLINE = 6       # 长连（黑方为禁手；白方按成五算）
+
+
+NUM_LEVELS = 7
 
 
 class ForbiddenSemantics(IntEnum):

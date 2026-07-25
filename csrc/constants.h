@@ -45,6 +45,23 @@ struct RuleConfig {
   int recursion_depth = 64;
 };
 
+// 棋型等级：某个空点落子后能形成的最高棋型，用作辅助监督标签。
+// 取值必须与 gomoku_instinct/rules/constants.py 的 Level 一致。
+//
+// 注意这里的「活三」用的是**非递归**判定（只看能否一手成活四），
+// 与三三禁手里那个递归定义不同 —— 它只是个特征标签，不参与规则判定；
+// 精确的禁手规则由单独的 forbidden 头去学。
+enum class Level : uint8_t {
+  NONE = 0,
+  CLOSED_THREE = 1,  // 眠三：再一手可成四，但成不了活四
+  OPEN_THREE = 2,    // 活三：再一手可成活四
+  FOUR = 3,          // 冲四：只有一个成五点
+  OPEN_FOUR = 4,     // 活四：两个成五点
+  FIVE = 5,          // 五连
+  OVERLINE = 6,      // 长连（黑方为禁手；白方按成五算）
+};
+constexpr int NUM_LEVELS = 7;
+
 struct Judgment {
   Outcome outcome = Outcome::ONGOING;
   Forbidden forbidden = Forbidden::NONE;

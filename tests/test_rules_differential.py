@@ -166,6 +166,79 @@ def test_python_reference_is_also_symmetric(py_rules):
                 assert base[5 * idx : 5 * idx + 5] == moved[5 * j : 5 * j + 5]
 
 
+# ── 棋型标注（辅助监督标签的来源）────────────────────────────────────────────
+
+
+def _grid(black=(), white=(), size=SIZE) -> bytearray:
+    g = bytearray(size * size)
+    for r, c in black:
+        g[r * size + c] = BLACK
+    for r, c in white:
+        g[r * size + c] = WHITE
+    return g
+
+
+def _level_at(cc_rules, grid, r, c, color=BLACK):
+    from gomoku_instinct.rules.constants import Level
+
+    return Level(cc_rules.pattern_map(grid, SIZE, color)[r * SIZE + c])
+
+
+def test_pattern_map_empty_board_is_all_none(cc_rules):
+    from gomoku_instinct.rules.constants import Level
+
+    levels = cc_rules.pattern_map(bytearray(SIZE * SIZE), SIZE, BLACK)
+    assert len(levels) == SIZE * SIZE
+    assert set(levels) == {int(Level.NONE)}
+
+
+def test_pattern_map_labels_known_shapes(cc_rules):
+    from gomoku_instinct.rules.constants import Level
+
+    # cols 3-6 已有黑子 -> 两端都能成五
+    g = _grid(black=[(7, 3), (7, 4), (7, 5), (7, 6)])
+    assert _level_at(cc_rules, g, 7, 7) == Level.FIVE
+    assert _level_at(cc_rules, g, 7, 2) == Level.FIVE
+
+    # cols 4-6 已有黑子，两端空 -> 落 col7 成活四
+    g = _grid(black=[(7, 4), (7, 5), (7, 6)])
+    assert _level_at(cc_rules, g, 7, 7) == Level.OPEN_FOUR
+
+    # 一端被白子挡住 -> 只能成冲四
+    g = _grid(black=[(7, 4), (7, 5), (7, 6)], white=[(7, 3)])
+    assert _level_at(cc_rules, g, 7, 7) == Level.FOUR
+
+    # 两子 -> 落一子成活三
+    g = _grid(black=[(7, 5), (7, 6)])
+    assert _level_at(cc_rules, g, 7, 7) == Level.OPEN_THREE
+
+    # 黑方接成 6 连是长连；同样形状白方走则算成五
+    g = _grid(black=[(7, 3), (7, 4), (7, 5), (7, 7), (7, 8)])
+    assert _level_at(cc_rules, g, 7, 6, BLACK) == Level.OVERLINE
+    g = _grid(white=[(7, 3), (7, 4), (7, 5), (7, 7), (7, 8)])
+    assert _level_at(cc_rules, g, 7, 6, WHITE) == Level.FIVE
+
+
+def test_pattern_map_only_labels_empty_points(cc_rules):
+    g = _grid(black=[(7, 5), (7, 6)], white=[(7, 7)])
+    levels = cc_rules.pattern_map(g, SIZE, BLACK)
+    assert levels[7 * SIZE + 5] == 0
+    assert levels[7 * SIZE + 7] == 0
+
+
+def test_pattern_map_is_symmetric(cc_rules):
+    """棋型标注同样必须在八重对称下不变。"""
+    rng = random.Random(31)
+    maps = [index_map(SIZE, t) for t in range(NUM_SYMMETRIES)]
+    for _ in range(15):
+        grid = random_position(rng, SIZE, "black_heavy")
+        base = cc_rules.pattern_map(grid, SIZE, BLACK)
+        for t in range(1, NUM_SYMMETRIES):
+            moved = cc_rules.pattern_map(transform_grid(grid, SIZE, t), SIZE, BLACK)
+            for idx in range(SIZE * SIZE):
+                assert base[idx] == moved[maps[t][idx]]
+
+
 # ── 递归深度审计 ────────────────────────────────────────────────────────────
 
 

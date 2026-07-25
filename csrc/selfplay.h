@@ -1,0 +1,161 @@
+// 向量化自博弈：同时推进上千局，把 MCTS 的叶子评估攒成一个大批次交给 GPU。
+//
+// 一轮的节奏是：
+//   collect()  每局从根下潜一次，停在叶子上，把待评估局面写进输出缓冲区
+//   （Python 侧编码特征、跑一次网络前向）
+//   apply()    用先验展开叶子、回传价值、退回根部；某局搜索次数够了就落子
+//
+// 每局每轮只下潜一次，同一棵树上不存在并发下潜，因此**不需要 virtual loss**，
+// PUCT 是精确的。批大小恒等于对局数，便于 CUDA Graph 捕获。
+//
+// 特征编码刻意留在 Python 侧：编码规范只有一份（gomoku_instinct/model/features.py），
+// 不在 C++ 里重复实现，免得两边悄悄走样。
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <random>
+#include <string>
+#include <vector>
+
+#include "constants.h"
+#include "mcts.h"
+#include "position.h"
+#include "renju.h"
+
+namespace gi {
+
+struct SelfPlayConfig {
+  int board_size = 15;
+  int num_games = 1024;
+
+  int sims = 400;
+  int fast_sims = 100;
+  // playout cap randomization：少数手用满 sims 并产出训练目标，
+  // 多数手用低 sims 只负责推进对局 —— 同样算力下目标产量高得多。
+  float full_search_prob = 0.25f;
+
+  float dirichlet_alpha = 0.15f;
+  float dirichlet_eps = 0.25f;
+
+  float temperature = 1.0f;
+  int temperature_moves = 16;
+
+  // 部署分布自博弈：这些对局由**零搜索策略**决定落子，但训练目标仍由 MCTS 产生。
+  // 目的是让样本覆盖到部署时真正会走进去的局面，消除训练/部署的分布漂移。
+  float raw_policy_fraction = 0.0f;
+
+  bool resign_enabled = true;
+  float resign_threshold = -0.92f;
+  float resign_audit_fraction = 0.05f;
+
+  int num_threads = 8;
+  uint64_t seed = 20260725;
+  ForbiddenSemantics semantics = ForbiddenSemantics::LOSE;
+
+  MctsConfig mcts;
+  RuleConfig rules;
+};
+
+struct Stats {
+  int64_t games = 0;
+  int64_t moves = 0;
+  int64_t samples = 0;
+  int64_t black_wins = 0;
+  int64_t white_wins = 0;
+  int64_t draws = 0;
+  int64_t forbidden_losses = 0;  // 黑方走出禁手而告负的局数
+  int64_t resigns = 0;
+  int64_t resign_false_positives = 0;  // 审计局里认输方其实会赢的次数
+  int64_t resign_audits = 0;
+  int64_t raw_policy_games = 0;
+};
+
+class SelfPlayRunner {
+ public:
+  explicit SelfPlayRunner(const SelfPlayConfig& cfg);
+  ~SelfPlayRunner();
+
+  int num_games() const { return cfg_.num_games; }
+  int num_cells() const { return cfg_.board_size * cfg_.board_size; }
+
+  // 收集一批待评估局面。needs_eval 标记哪些槽位真的需要网络输出
+  // （终局叶子不需要，但仍占位以保持批大小恒定）。
+  void collect(uint8_t* boards, uint8_t* to_move, int32_t* history,
+               int32_t* move_number, uint8_t* needs_eval);
+
+  // 回填评估结果。policy 为 (G, N)，只需按空点屏蔽即可，
+  // 展开时会在真正的合法着法上重新归一化。value 为 (G,)，行棋方视角。
+  void apply(const float* policy, const float* value);
+
+  // 已完成对局累积的样本数。
+  int pending_samples() const;
+
+  // 取出样本并清空队列，返回实际取出的条数。
+  int drain(int max_samples, uint8_t* boards, uint8_t* to_move, int32_t* history,
+            int32_t* move_number, float* policy, float* value, int32_t* plies,
+            int32_t* next_move, float* root_value, uint8_t* searched);
+
+  Stats stats() const;
+  void reset_stats();
+
+  // 换机续训用：导出/恢复各局随机数发生器的**完整**状态。
+  // 用标准库的流序列化，恢复后随机流逐位一致。
+  std::vector<std::string> rng_state() const;
+  void set_rng_state(const std::vector<std::string>& state);
+
+ private:
+  struct Sample {
+    std::vector<uint8_t> board;
+    std::vector<float> policy;
+    uint8_t to_move = BLACK;
+    int32_t history[HISTORY_PLANES] = {-1, -1, -1, -1};
+    int32_t move_number = 0;
+    int32_t ply = 0;
+    float root_value = 0.0f;
+    float value = 0.0f;
+    int32_t plies_remaining = 0;
+    int32_t next_move = -1;
+    uint8_t searched = 1;
+  };
+
+  // 每局一个槽位。统计量与产出样本都存在槽位内部，工作线程之间因此互不接触，
+  // 全程无锁；汇总只在主线程调用 stats()/drain() 时做。
+  struct Slot {
+    std::unique_ptr<Position> pos;
+    std::unique_ptr<MctsTree> tree;
+    std::mt19937_64 rng;
+    std::vector<Sample> pending;   // 本局已记录、等待填入对局结果的样本
+    std::vector<Sample> finished;  // 已完成对局的样本，等待 drain
+    std::vector<int32_t> visit_counts;
+    std::vector<float> root_policy;  // 加噪前的网络先验，供零搜索落子使用
+    std::vector<float> noise;
+    Stats stats;
+
+    int root_ply = 0;
+    int sims_target = 0;
+    int sims_done = 0;
+    int descent_depth = 0;
+    int leaf = -1;
+    bool leaf_needs_eval = false;
+    float leaf_terminal_value = 0.0f;
+    bool full_search = true;
+    bool raw_policy_game = false;
+    bool disable_resign = false;
+    uint8_t would_resign_side = 0;  // 审计局里「本该认输」的一方
+  };
+
+  void start_game(Slot& slot);
+  void start_move(Slot& slot);
+  void finish_move(Slot& slot);
+  void finish_game(Slot& slot, Outcome outcome, bool by_resign);
+  int choose_move(Slot& slot);
+
+  SelfPlayConfig cfg_;
+  std::unique_ptr<Rules> rules_;
+  std::vector<Slot> slots_;
+  std::unique_ptr<class ThreadPool> pool_;
+};
+
+}  // namespace gi

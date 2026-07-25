@@ -70,9 +70,15 @@ class TrainerConfig:
     grad_clip: float = 1.0
     compile: bool = True
 
-    # 一个周期内的节奏
+    # 一个周期内的节奏。
+    #
+    # 训练步数**不是**固定值，而是按目标样本复用率自适应算出来的：
+    # 自博弈比训练贵得多（一手棋要几百次网络评估，一个训练步只吃一个 batch），
+    # 固定配比极易失衡 —— 实测按固定配比跑，复用率会飙到 20 以上，
+    # 也就是每条样本被反复训练二十几遍，直接进入过拟合区间。
     selfplay_steps_per_cycle: int = 200
-    train_steps_per_cycle: int = 50
+    target_sample_reuse: float = 4.0
+    max_train_steps_per_cycle: int = 400
 
     # 容灾与日志
     checkpoint_every_seconds: float = 600.0
@@ -201,6 +207,20 @@ class Trainer:
         self.model.train()
         return added
 
+    def train_steps_for_cycle(self) -> int:
+        """按目标样本复用率决定这一周期训练多少步。
+
+        复用率 = 已训练样本数 ÷ 历史产出样本数。太高会过拟合、
+        并且是在拿旧数据反复磨；太低则浪费了自博弈辛苦产出的样本。
+        这里让它自己追着目标值走，不必手工去配「自博弈跑几轮、训练跑几步」。
+        """
+        allowed = self.buffer.total_added * self.cfg.target_sample_reuse
+        deficit = allowed - self.samples_seen
+        if deficit <= 0:
+            return 0
+        steps = int(deficit // self.cfg.batch_size)
+        return max(0, min(steps, self.cfg.max_train_steps_per_cycle))
+
     def run(self, max_seconds: float | None = None) -> None:
         started = time.time()
         log_path = os.path.join(self.run_dir, "logs", "metrics.jsonl")
@@ -213,10 +233,12 @@ class Trainer:
             self.cycle += 1
 
             if len(self.buffer) >= self.cfg.min_positions_to_start:
-                for _ in range(self.cfg.train_steps_per_cycle):
+                steps = self.train_steps_for_cycle()
+                for _ in range(steps):
                     metrics = self.train_step()
                     if self.step % self.cfg.log_every_steps == 0:
                         metrics.update(self._context_metrics(added))
+                        metrics["train/steps_this_cycle"] = steps
                         self._log(log_path, metrics)
 
             if self._should_checkpoint():

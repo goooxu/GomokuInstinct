@@ -80,6 +80,13 @@ train:
   max_steps: 2000000
   compile: true                 # torch.compile 训练 step
 
+  # 每个周期训练多少步不是写死的，而是按目标样本复用率自适应算出来。
+  # 自博弈比训练贵得多（一手棋要几百次网络评估），固定配比极易失衡：
+  # 实测按固定配比跑，复用率会飙到 20 以上，等于每条样本被反复训练二十几遍。
+  target_sample_reuse: 4.0
+  max_train_steps_per_cycle: 400
+  selfplay_steps_per_cycle: 200
+
   optim:
     name: bf16_adamw            # 主权重 BF16 + Kahan 补偿求和
     lr: 2.0e-3

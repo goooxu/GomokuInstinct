@@ -202,6 +202,31 @@ def test_aux_weights_decay_over_training():
     assert w.aux_scale(1000) == pytest.approx(0.1)
 
 
+def test_train_steps_follow_target_reuse(tmp_path):
+    """训练步数应当自适应地追着目标复用率走。
+
+    固定配比很容易失衡：自博弈一手棋要几百次网络评估，而一个训练步只吃一个 batch，
+    实测按固定配比跑复用率会飙到 20 以上。
+    """
+    trainer = _tiny_trainer(str(tmp_path / "reuse"))
+    trainer.cfg.batch_size = 100
+    trainer.cfg.target_sample_reuse = 4.0
+    trainer.cfg.max_train_steps_per_cycle = 1000
+
+    trainer.buffer.total_added = 1000
+    trainer.samples_seen = 0
+    assert trainer.train_steps_for_cycle() == 40  # 4000 次使用 / batch 100
+
+    trainer.samples_seen = 3900
+    assert trainer.train_steps_for_cycle() == 1
+
+    # 已经用够了就不再训练，等自博弈补新样本
+    trainer.samples_seen = 4000
+    assert trainer.train_steps_for_cycle() == 0
+    trainer.samples_seen = 99999
+    assert trainer.train_steps_for_cycle() == 0
+
+
 def test_lr_schedule_warms_up_then_decays():
     cfg = TrainerConfig(lr=1e-3, warmup_steps=100, max_steps=1000, min_lr_scale=0.05)
     assert lr_at(0, cfg) == pytest.approx(1e-5)
@@ -228,7 +253,8 @@ def _tiny_trainer(run_dir: str) -> Trainer:
         max_steps=1_000_000,
         compile=False,
         selfplay_steps_per_cycle=120,
-        train_steps_per_cycle=3,
+        max_train_steps_per_cycle=3,
+        target_sample_reuse=1000.0,  # 测试里要确保每周期都真的训练几步
         label_workers=2,
         checkpoint_every_seconds=1e9,
         checkpoint_every_steps=1_000_000,

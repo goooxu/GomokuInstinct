@@ -49,9 +49,12 @@ if [ "${GI_AS_ROOT:-0}" != "1" ]; then
   opts+=(-u "$(id -u):$(id -g)")
 fi
 
-# 只有真的挂着终端时才加 -it，否则后台/管道调用会失败。
+# -i 始终要加：不加的话 docker 根本不会把 stdin 接进容器，
+# 管道喂输入（例如把着法喂给对战 CLI）会立刻读到 EOF。
+# -t 只在真的挂着终端时加，否则后台调用会失败。
+opts+=(-i)
 if [ -t 0 ] && [ -t 1 ]; then
-  opts+=(-it)
+  opts+=(-t)
 fi
 
 if [ "$#" -eq 0 ]; then

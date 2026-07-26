@@ -233,6 +233,123 @@ def test_losses_are_finite_and_metrics_present(rules):
     assert all(p.grad is not None for p in net.parameters())
 
 
+def _forbidden_batch(device="cpu"):
+    """造一个黑方待走、且确实存在禁手点的局面。
+
+    (7,5)(7,6) 与 (5,7)(6,7) 四子在手，(7,7) 是三三禁手 —— 与规则测试里
+    那条用例同形，这里复用它来构造带禁手标签的训练批次。
+    """
+    from gomoku_instinct.core import make_rules
+
+    rules_core = make_rules(None)
+    size = 15
+    n = size * size
+    grid = bytearray(n)
+    for r, c in [(7, 5), (7, 6), (5, 7), (6, 7)]:
+        grid[r * size + c] = BLACK
+    forbidden = np.frombuffer(rules_core.forbidden_map(bytes(grid), size), np.uint8)
+    assert forbidden.sum() > 0, "构造的局面里没有禁手点，测试前提不成立"
+
+    boards = torch.tensor([list(grid)], dtype=torch.uint8, device=device)
+    policy = torch.zeros(1, n, device=device)
+    policy[0, 0] = 1.0  # 目标分布随便给个合法点
+    return (
+        boards,
+        torch.tensor(forbidden.copy(), dtype=torch.float32, device=device).unsqueeze(0),
+        policy,
+        size,
+        n,
+    )
+
+
+def test_forbidden_mass_penalty_pushes_policy_off_forbidden_points():
+    """策略把概率压在禁手点上时，必须被直接惩罚。
+
+    这是零搜索部署下最致命的失误：走上去直接判负，而对战时没有搜索兜底。
+    单靠策略交叉熵推不动 —— 禁手点在 225 个点里只占极小的概率质量。
+    """
+    from gomoku_instinct.model import InstinctNet, ModelConfig, encode
+    from gomoku_instinct.train.replay import Batch
+
+    boards, forbidden, policy, size, n = _forbidden_batch()
+    forbidden_idx = int(forbidden[0].argmax().item())
+
+    batch = Batch(
+        boards=boards,
+        to_move=torch.tensor([BLACK], dtype=torch.uint8),
+        history=torch.full((1, 4), -1, dtype=torch.int64),
+        move_number=torch.tensor([4], dtype=torch.int64),
+        policy=policy,
+        value=torch.zeros(1),
+        plies_remaining=torch.tensor([5], dtype=torch.int64),
+        next_move=torch.tensor([-1], dtype=torch.int64),
+        threat_self=torch.zeros(1, n, dtype=torch.int64),
+        threat_opp=torch.zeros(1, n, dtype=torch.int64),
+        forbidden=forbidden,
+        root_value=torch.zeros(1),
+    )
+
+    cfg = ModelConfig(size=size, channels=16, blocks=2, attn_every=2)
+    net = InstinctNet(cfg)
+    planes = encode(
+        batch.boards, batch.to_move, batch.history, batch.move_number,
+        size, dtype=torch.float32,
+    )
+
+    # 人为把禁手点的 logit 抬到最高，模拟「策略学会了走最凶的一手」
+    out = net(planes)
+    out.policy = out.policy.clone()
+    out.policy[0, forbidden_idx] += 20.0
+
+    off = LossWeights(policy_forbidden=0.0)
+    on = LossWeights(policy_forbidden=2.0)
+    loss_off, m_off = compute_losses(out, batch, off, 0, cfg.threat_levels)
+    loss_on, m_on = compute_losses(out, batch, on, 0, cfg.threat_levels)
+
+    assert m_off["policy/forbidden_mass"] > 0.9, "构造失败：策略没压在禁手点上"
+    assert m_off["policy/forbidden_argmax_rate"] == 1.0
+    assert loss_on.item() > loss_off.item() + 1.0, "惩罚项没有生效"
+
+    # 梯度必须把那个 logit 往下压
+    out2 = net(planes)
+    logit = out2.policy[0, forbidden_idx]
+    out2.policy = out2.policy.clone()
+    out2.policy[0, forbidden_idx] = logit + 20.0
+    loss, _ = compute_losses(out2, batch, on, 0, cfg.threat_levels)
+    grad = torch.autograd.grad(loss, out2.policy, retain_graph=True)[0]
+    assert grad[0, forbidden_idx] > 0, "禁手点 logit 的梯度方向不对"
+
+
+def test_forbidden_metrics_absent_when_white_to_move():
+    """禁手只约束黑方，白方待走时不该产出这些指标。"""
+    from gomoku_instinct.model import InstinctNet, ModelConfig, encode
+    from gomoku_instinct.train.replay import Batch
+
+    boards, forbidden, policy, size, n = _forbidden_batch()
+    batch = Batch(
+        boards=boards,
+        to_move=torch.tensor([WHITE], dtype=torch.uint8),
+        history=torch.full((1, 4), -1, dtype=torch.int64),
+        move_number=torch.tensor([5], dtype=torch.int64),
+        policy=policy,
+        value=torch.zeros(1),
+        plies_remaining=torch.tensor([5], dtype=torch.int64),
+        next_move=torch.tensor([-1], dtype=torch.int64),
+        threat_self=torch.zeros(1, n, dtype=torch.int64),
+        threat_opp=torch.zeros(1, n, dtype=torch.int64),
+        forbidden=forbidden,
+        root_value=torch.zeros(1),
+    )
+    cfg = ModelConfig(size=size, channels=16, blocks=2, attn_every=2)
+    net = InstinctNet(cfg)
+    planes = encode(
+        batch.boards, batch.to_move, batch.history, batch.move_number,
+        size, dtype=torch.float32,
+    )
+    _, metrics = compute_losses(net(planes), batch, LossWeights(), 0, cfg.threat_levels)
+    assert "policy/forbidden_mass" not in metrics
+
+
 def test_aux_weights_decay_over_training():
     w = LossWeights(decay_start_step=100, decay_end_step=200, decay_final_scale=0.1)
     assert w.aux_scale(0) == 1.0

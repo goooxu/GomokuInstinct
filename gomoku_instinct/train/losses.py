@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 
 from ..model.net import NetOutput
-from ..rules.constants import EMPTY
+from ..rules.constants import BLACK, EMPTY
 from .replay import Batch
 
 
@@ -25,9 +25,17 @@ class LossWeights:
     policy: float = 1.0
     value: float = 1.0
     threat: float = 0.3
-    forbidden: float = 0.3
+    forbidden: float = 0.6
     plies: float = 0.1
     reply: float = 0.2
+
+    # 直接惩罚策略落在禁手点上的概率质量。
+    #
+    # 这一项不随辅助权重衰减：它针对的不是"学个特征"，而是零搜索部署时最致命的
+    # 单点失误 —— 走上禁手点直接判负。MCTS 目标虽然已经把禁手点压到接近 0，
+    # 但那点质量在 225 个点里微不足道，交叉熵推不动；实测策略变强之后
+    # 禁手告负率反而从 0.17% 涨到 6%，因为黑方"最凶"的着法往往正是三三、四四。
+    policy_forbidden: float = 2.0
 
     # 辅助头的衰减 schedule
     decay_start_step: int = 200_000
@@ -41,9 +49,10 @@ class LossWeights:
             policy=weights.get("policy", 1.0),
             value=weights.get("value", 1.0),
             threat=weights.get("aux_threat", 0.3),
-            forbidden=weights.get("aux_forbidden", 0.3),
+            forbidden=weights.get("aux_forbidden", 0.6),
             plies=weights.get("aux_plies", 0.1),
             reply=weights.get("aux_reply", 0.2),
+            policy_forbidden=weights.get("policy_forbidden", 2.0),
             decay_start_step=weights.get("aux_decay_start_step", 200_000),
             decay_end_step=weights.get("aux_decay_end_step", 400_000),
             decay_final_scale=weights.get("aux_decay_final_scale", 0.1),
@@ -113,6 +122,24 @@ def compute_losses(
     total = weights.policy * policy_loss + weights.value * value_loss
     metrics["loss/policy"] = policy_loss.item()
     metrics["loss/value"] = value_loss.item()
+
+    # ── 禁手回避 ────────────────────────────────────────────────────────────
+    # 落在禁手点上的策略概率质量。这个数就是「零搜索部署时自杀的概率」——
+    # 对战时没有搜索兜底，走上去直接判负，因此它是本项目最该盯的单一指标。
+    is_black = batch.to_move == BLACK
+    if bool(is_black.any()):
+        probs = torch.softmax(logits, dim=-1)
+        forbidden_mass = (probs * batch.forbidden).sum(dim=-1)[is_black]
+        metrics["policy/forbidden_mass"] = forbidden_mass.mean().item()
+        metrics["policy/forbidden_argmax_rate"] = (
+            batch.forbidden[is_black]
+            .gather(1, logits[is_black].argmax(-1, keepdim=True))
+            .mean()
+            .item()
+        )
+        if weights.policy_forbidden > 0:
+            # 不随辅助权重衰减：这不是"学个特征"，是避免自杀
+            total = total + weights.policy_forbidden * forbidden_mass.mean()
 
     scale = weights.aux_scale(step)
     metrics["loss/aux_scale"] = scale

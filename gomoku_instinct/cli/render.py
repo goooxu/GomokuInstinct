@@ -19,6 +19,11 @@ EMPTY_POINT = "·"
 FORBIDDEN_MARK = "×"
 CANDIDATE_MARK = "+"
 
+# 光标用反显而非加括号：括号会占额外列宽、把整行对齐搞乱，而棋盘一旦错列，
+# 「看错落子位置」这个本来要解决的问题反而更严重了。
+INVERSE_ON = "\033[7m"
+INVERSE_OFF = "\033[27m"
+
 
 class CoordinateError(ValueError):
     pass
@@ -55,11 +60,12 @@ def render_board(
     last_move: int | None = None,
     forbidden: list[bool] | None = None,
     highlight: set[int] | None = None,
+    cursor: int | None = None,
 ) -> str:
     """把棋盘画成字符串。
 
     最后一手用实心/空心菱形标出，forbidden 里的空点标 ×（给执黑的人看），
-    highlight 里的空点标 +（用于展示 AI 的候选点）。
+    highlight 里的空点标 +（用于展示 AI 的候选点），cursor 处反显。
     """
     width = len(str(size))
     header = " " * (width + 1) + " ".join(COLUMN_LETTERS[:size])
@@ -80,6 +86,8 @@ def render_board(
                 ch = CANDIDATE_MARK
             else:
                 ch = EMPTY_POINT
+            if idx == cursor:
+                ch = f"{INVERSE_ON}{ch}{INVERSE_OFF}"
             cells.append(ch)
         lines.append(f"{size - r:>{width}} " + " ".join(cells))
 

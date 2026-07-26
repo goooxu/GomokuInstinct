@@ -18,6 +18,7 @@ def _cmd_play(args) -> int:
         show_policy=args.show_policy,
         safe_mode=args.safe_mode,
         temperature=args.temperature,
+        input_mode=args.input_mode,
     )
 
 
@@ -104,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     play_parser.add_argument("--temperature", type=float, default=0.0,
                              help="0 表示确定性 argmax")
+    play_parser.add_argument(
+        "--input-mode", default="auto", choices=["auto", "cursor", "text"],
+        help="cursor 用方向键选点（默认，需要真正的终端）；text 逐行输入坐标",
+    )
     play_parser.set_defaults(func=_cmd_play)
 
     arena_parser = sub.add_parser("arena", help="模型间/对基线的批量对局与 Elo 估计")

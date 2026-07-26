@@ -68,13 +68,28 @@ python scripts/train.py --run-dir runs/dev9 --board-size 9 \
 gomoku-instinct play --color black --ckpt <checkpoint>
 ```
 
-对局中可用命令：`undo` / `hint` / `save` / `load` / `resign` / `quit`。
+默认是**光标模式**：方向键（或 vim 的 `hjkl`）移动光标，回车/空格落子。当前坐标和该点
+状态（空点 / 你的禁手点 / 已有子）实时显示在棋盘下方 —— 15×15 上靠肉眼数格子报坐标
+很容易错行错列，落子前先确认比落错了再悔棋省事。
+
+| 按键 | 作用 |
+|---|---|
+| 方向键 / `hjkl` | 移动光标 |
+| 回车 / 空格 | 落子 |
+| `u` | 悔一回合（连同 AI 的应手一起退回） |
+| `i` | 让 AI 说说它怎么看当前局面（不落子） |
+| `s` / `o` | 存档 / 读档 |
+| `r` / `q` | 认输 / 退出 |
+
+输入被重定向时（管道、脚本）自动退回逐行输入坐标的模式，命令为
+`undo` / `hint` / `save` / `load` / `resign` / `quit`。
 
 常用选项：
 
 | 选项 | 说明 |
 |---|---|
 | `--color black\|white` | 人类执子颜色 |
+| `--input-mode auto\|cursor\|text` | 落子方式，默认 `auto`（是终端就用光标模式） |
 | `--show-policy` | 显示 AI 的 top-5 候选手概率、value 估计与禁手点预测 |
 | `--safe-mode` | 用规则给 AI 兜底屏蔽禁手点。**默认关闭** —— 开启后落子就不再是纯模型推理了 |
 

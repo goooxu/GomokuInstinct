@@ -106,6 +106,7 @@ def run(
     show_policy: bool = False,
     safe_mode: bool = False,
     temperature: float = 0.0,
+    input_mode: str = "auto",
 ) -> int:
     model, meta = load_model(checkpoint, device)
     size = meta["board_size"]
@@ -116,6 +117,20 @@ def run(
     )
 
     human = BLACK if human_color.lower().startswith("b") else WHITE
+
+    # 默认走光标模式：15x15 上肉眼数格子报坐标太容易错行错列。
+    # 管道输入、重定向、非 POSIX 终端下自动退回逐行输入坐标。
+    from . import keyboard as kb
+    from .cursor_play import run_cursor_game
+
+    use_cursor = input_mode == "cursor" or (
+        input_mode == "auto" and kb.supports_cursor_mode()
+    )
+    if use_cursor:
+        return run_cursor_game(game, player, human, meta, show_policy)
+    if input_mode == "cursor":
+        print("当前环境不支持光标模式（需要真正的终端），退回坐标输入。")
+
     print(f"gomoku-instinct  棋盘 {size}x{size}  你执{'黑' if human == BLACK else '白'}")
     print(f"权重：{os.path.basename(meta['path'])}（训练到 step {meta['step']:,}）")
     print("AI 落子完全由一次网络前向决定，不使用任何搜索。")

@@ -514,3 +514,35 @@ def test_latest_pointer_survives_multiple_checkpoints(tmp_path):
     assert not any(f.endswith(".tmp") for f in os.listdir(ckpt_dir)), (
         "留下了临时文件，checkpoint 的原子写有问题"
     )
+
+
+def test_actor_shard_index_continues_after_restart(rules, tmp_path):
+    """actor 重启后分片编号必须接着写，不能从 0 重来。
+
+    这条曾经漏掉：重启后写出的 actorN_00000000.npz 与上一次运行同名，
+    既覆盖了旧分片，又因为 trainer 的「已见分片」集合里早有这个名字而被整批跳过——
+    新样本被静默丢弃，训练看着在跑却一步不动。
+    """
+    shard_dir = str(tmp_path / "replay")
+
+    first = ReplayBuffer(5000, SIZE, shard_dir=shard_dir, shard_size=50,
+                         shard_prefix="actor0")
+    first.add_from_drain(_fake_drain(120, seed=60), rules)
+    first.flush()
+    before = sorted(f for f in os.listdir(shard_dir) if f.endswith(".npz"))
+    assert before
+
+    # 模拟 actor 重启：新建一个 sink
+    second = ReplayBuffer(5000, SIZE, shard_dir=shard_dir, shard_size=50,
+                          shard_prefix="actor0")
+    assert second.resume_shard_index() == len(before)
+    second.add_from_drain(_fake_drain(120, seed=61), rules)
+    second.flush()
+
+    after = sorted(f for f in os.listdir(shard_dir) if f.endswith(".npz"))
+    assert len(after) > len(before), "重启后的分片覆盖了旧分片"
+    assert set(before) <= set(after), "旧分片被覆盖了"
+
+    # trainer 视角：两批都要能吃到
+    trainer_buf = ReplayBuffer(5000, SIZE, shard_dir=shard_dir, shard_size=50)
+    assert trainer_buf.ingest_new_shards() == 240

@@ -323,6 +323,27 @@ class ReplayBuffer:
             except OSError:
                 pass
 
+    def resume_shard_index(self) -> int:
+        """从磁盘上已有的同前缀分片接着编号。
+
+        actor 进程每次重启都会新建一个 sink，编号若从 0 重来，写出的分片会与上一次
+        运行的同名：既覆盖了旧数据，又因为 trainer 的「已见分片」集合里早有这个名字
+        而被整批跳过 —— 新样本被静默丢弃，训练看似在跑却一步不动。
+        """
+        if not self.shard_dir or not os.path.isdir(self.shard_dir):
+            return 0
+        prefix = self.shard_prefix + "_"
+        existing = [
+            f
+            for f in os.listdir(self.shard_dir)
+            if f.startswith(prefix) and f.endswith(".npz") and not f.endswith(".tmp.npz")
+        ]
+        if existing:
+            self._shard_index = max(
+                int(f[len(prefix) : len(prefix) + 8]) for f in existing
+            ) + 1
+        return self._shard_index
+
     def ingest_new_shards(self, prefixes: tuple[str, ...] = ("actor",)) -> int:
         """装入外部 actor 进程新写出来的分片。
 

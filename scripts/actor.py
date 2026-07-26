@@ -128,6 +128,10 @@ def main() -> int:
         label_workers=args.label_workers,
         shard_prefix=prefix,
     )
+    # 接着磁盘上已有的分片编号往下写。不这样做的话重启后会从 0 重来，
+    # 与上一次运行的分片同名——既覆盖旧数据，又会被 trainer 当成"已见过"整批跳过。
+    first_index = sink.resume_shard_index()
+    print(f"[{prefix}] 分片从 #{first_index} 开始写", flush=True)
 
     started = time.time()
     last_reload = time.time()

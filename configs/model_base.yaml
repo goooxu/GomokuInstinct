@@ -56,6 +56,11 @@ loss_weights:
   # 交叉熵推不动 —— 实测策略变强后禁手告负率反而从 0.17% 涨到 6%，
   # 因为黑方"最凶"的着法往往正是三三、四四。
   policy_forbidden: 2.0
+
+  # 边际损失：最好的安全着法必须以 forbidden_margin 的余量压过最好的禁手点。
+  # 质量惩罚压整体分布，而部署时致命的是 argmax 落错，两者不是一回事。
+  policy_forbidden_margin: 1.0
+  forbidden_margin: 2.0
   aux_plies: 0.1
   aux_reply: 0.2
   # 辅助头是训练脚手架，后期按 schedule 衰减，避免占用主任务容量

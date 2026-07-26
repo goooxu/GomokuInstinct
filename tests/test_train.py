@@ -546,3 +546,84 @@ def test_actor_shard_index_continues_after_restart(rules, tmp_path):
     # trainer 视角：两批都要能吃到
     trainer_buf = ReplayBuffer(5000, SIZE, shard_dir=shard_dir, shard_size=50)
     assert trainer_buf.ingest_new_shards() == 240
+
+
+def test_forbidden_margin_loss_targets_argmax_not_mass():
+    """边际损失必须直接盯 argmax，而不是整体概率质量。
+
+    实测中质量惩罚把无条件的禁手 argmax 率压到 0.4% 以下，但自博弈的禁手告负率
+    仍有 3.6%——失误全集中在"确实存在禁手点"的局面上，而那类局面在全体样本里
+    占比很小，无条件指标被稀释掉了。所以既要按条件度量，也要直接对 argmax 施压。
+    """
+    from gomoku_instinct.model import InstinctNet, ModelConfig, encode
+    from gomoku_instinct.train.replay import Batch
+
+    boards, forbidden, policy, size, n = _forbidden_batch()
+    forbidden_idx = int(forbidden[0].argmax().item())
+
+    batch = Batch(
+        boards=boards,
+        to_move=torch.tensor([BLACK], dtype=torch.uint8),
+        history=torch.full((1, 4), -1, dtype=torch.int64),
+        move_number=torch.tensor([4], dtype=torch.int64),
+        policy=policy,
+        value=torch.zeros(1),
+        plies_remaining=torch.tensor([5], dtype=torch.int64),
+        next_move=torch.tensor([-1], dtype=torch.int64),
+        threat_self=torch.zeros(1, n, dtype=torch.int64),
+        threat_opp=torch.zeros(1, n, dtype=torch.int64),
+        forbidden=forbidden,
+        root_value=torch.zeros(1),
+    )
+    cfg = ModelConfig(size=size, channels=16, blocks=2, attn_every=2)
+    net = InstinctNet(cfg)
+    planes = encode(batch.boards, batch.to_move, batch.history,
+                    batch.move_number, size, dtype=torch.float32)
+
+    # 禁手点只比最好的安全点高一点点：质量惩罚几乎不痛，但 argmax 已经错了
+    out = net(planes)
+    out.policy = out.policy.detach().clone()
+    out.policy -= out.policy.max()
+    out.policy[0, forbidden_idx] = 0.5
+    out.policy.requires_grad_(True)
+
+    w = LossWeights(policy_forbidden=0.0, policy_forbidden_margin=1.0)
+    loss, metrics = compute_losses(out, batch, w, 0, cfg.threat_levels)
+
+    assert metrics["policy/forbidden_argmax_rate_risky"] == 1.0
+    assert metrics["policy/risky_position_rate"] == 1.0
+    assert metrics["loss/forbidden_margin"] > 0, "边际损失没有被触发"
+
+    grad = torch.autograd.grad(loss, out.policy)[0]
+    assert grad[0, forbidden_idx] > 0, "禁手点 logit 的梯度方向不对"
+
+
+def test_forbidden_margin_silent_when_no_forbidden_point():
+    """局面里没有禁手点时不该产出这些指标，也不该有额外损失。"""
+    from gomoku_instinct.model import InstinctNet, ModelConfig, encode
+    from gomoku_instinct.train.replay import Batch
+
+    size = 15
+    n = size * size
+    batch = Batch(
+        boards=torch.zeros(1, n, dtype=torch.uint8),
+        to_move=torch.tensor([BLACK], dtype=torch.uint8),
+        history=torch.full((1, 4), -1, dtype=torch.int64),
+        move_number=torch.zeros(1, dtype=torch.int64),
+        policy=torch.full((1, n), 1.0 / n),
+        value=torch.zeros(1),
+        plies_remaining=torch.tensor([5], dtype=torch.int64),
+        next_move=torch.tensor([-1], dtype=torch.int64),
+        threat_self=torch.zeros(1, n, dtype=torch.int64),
+        threat_opp=torch.zeros(1, n, dtype=torch.int64),
+        forbidden=torch.zeros(1, n),
+        root_value=torch.zeros(1),
+    )
+    cfg = ModelConfig(size=size, channels=16, blocks=2, attn_every=2)
+    net = InstinctNet(cfg)
+    planes = encode(batch.boards, batch.to_move, batch.history,
+                    batch.move_number, size, dtype=torch.float32)
+    _, metrics = compute_losses(net(planes), batch, LossWeights(), 0, cfg.threat_levels)
+    assert metrics["policy/risky_position_rate"] == 0.0
+    assert "policy/forbidden_argmax_rate_risky" not in metrics
+    assert "loss/forbidden_margin" not in metrics

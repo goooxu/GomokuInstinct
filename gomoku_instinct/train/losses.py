@@ -37,6 +37,15 @@ class LossWeights:
     # 禁手告负率反而从 0.17% 涨到 6%，因为黑方"最凶"的着法往往正是三三、四四。
     policy_forbidden: float = 2.0
 
+    # 边际损失：最好的安全着法必须以一定余量压过最好的禁手点。
+    #
+    # 质量惩罚压的是整体概率分布，而零搜索部署时真正致命的是 **argmax 落错** ——
+    # 两者不是一回事。实测质量惩罚把无条件的禁手 argmax 率压到 0.4% 以下，
+    # 但自博弈的禁手告负率仍在 3.6%，因为失误全部集中在"确实存在禁手点"的局面上，
+    # 而那类局面在全体样本里占比很小，指标被稀释掉了。
+    policy_forbidden_margin: float = 1.0
+    forbidden_margin: float = 2.0
+
     # 辅助头的衰减 schedule
     decay_start_step: int = 200_000
     decay_end_step: int = 400_000
@@ -53,6 +62,8 @@ class LossWeights:
             plies=weights.get("aux_plies", 0.1),
             reply=weights.get("aux_reply", 0.2),
             policy_forbidden=weights.get("policy_forbidden", 2.0),
+            policy_forbidden_margin=weights.get("policy_forbidden_margin", 1.0),
+            forbidden_margin=weights.get("forbidden_margin", 2.0),
             decay_start_step=weights.get("aux_decay_start_step", 200_000),
             decay_end_step=weights.get("aux_decay_end_step", 400_000),
             decay_final_scale=weights.get("aux_decay_final_scale", 0.1),
@@ -131,15 +142,38 @@ def compute_losses(
         probs = torch.softmax(logits, dim=-1)
         forbidden_mass = (probs * batch.forbidden).sum(dim=-1)[is_black]
         metrics["policy/forbidden_mass"] = forbidden_mass.mean().item()
-        metrics["policy/forbidden_argmax_rate"] = (
-            batch.forbidden[is_black]
-            .gather(1, logits[is_black].argmax(-1, keepdim=True))
-            .mean()
-            .item()
-        )
+
+        picks_forbidden = batch.forbidden.gather(
+            1, logits.argmax(-1, keepdim=True)
+        ).squeeze(1)
+        metrics["policy/forbidden_argmax_rate"] = picks_forbidden[is_black].mean().item()
+
         if weights.policy_forbidden > 0:
             # 不随辅助权重衰减：这不是"学个特征"，是避免自杀
             total = total + weights.policy_forbidden * forbidden_mass.mean()
+
+        # 只在**确实存在禁手点**的局面上度量与施压。
+        # 不加这个条件，指标会被大量"根本没有禁手点"的局面稀释到看不出问题。
+        risky = is_black & (batch.forbidden.sum(-1) > 0)
+        metrics["policy/risky_position_rate"] = risky.float().mean().item()
+        if bool(risky.any()):
+            metrics["policy/forbidden_argmax_rate_risky"] = (
+                picks_forbidden[risky].mean().item()
+            )
+
+            safe = legal & (batch.forbidden < 0.5)
+            has_safe = safe.any(dim=-1)
+            eligible = risky & has_safe
+            if bool(eligible.any()):
+                neg_inf = torch.finfo(logits.dtype).min
+                best_forbidden = logits.masked_fill(batch.forbidden < 0.5, neg_inf).max(-1).values
+                best_safe = logits.masked_fill(~safe, neg_inf).max(-1).values
+                margin_loss = torch.relu(
+                    best_forbidden - best_safe + weights.forbidden_margin
+                )[eligible].mean()
+                metrics["loss/forbidden_margin"] = margin_loss.item()
+                if weights.policy_forbidden_margin > 0:
+                    total = total + weights.policy_forbidden_margin * margin_loss
 
     scale = weights.aux_scale(step)
     metrics["loss/aux_scale"] = scale

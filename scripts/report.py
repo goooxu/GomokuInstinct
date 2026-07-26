@@ -29,7 +29,8 @@ COLUMNS = [
     ("threat/accuracy_on_threats", "威胁识别", "{:>8.1%}"),
     ("forbidden/recall", "禁手召回", "{:>8.1%}"),
     # 零搜索部署时自杀的概率——本项目最该盯的单一指标
-    ("policy/forbidden_mass", "禁手质量", "{:>8.2%}"),
+    # 只看"确实存在禁手点"的局面——不加这个条件指标会被稀释到看不出问题
+    ("policy/forbidden_argmax_rate_risky", "禁手误选", "{:>8.2%}"),
     ("buffer/size", "样本窗口", "{:>9.0f}"),
     ("buffer/reuse", "复用率", "{:>7.1f}"),
 ]

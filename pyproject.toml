@@ -28,6 +28,9 @@ gomoku-instinct = "gomoku_instinct.cli.main:main"
 [tool.setuptools.packages.find]
 include = ["gomoku_instinct*"]
 
+[tool.setuptools.package-data]
+gomoku_instinct = ["web/static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

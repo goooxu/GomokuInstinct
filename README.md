@@ -62,7 +62,26 @@ python scripts/train.py --run-dir runs/dev9 --board-size 9 \
     --override num_games=512 sims=96 batch_size=512 min_positions_to_start=3000
 ```
 
-## 人机对战
+## 人机对战（网页版）
+
+```bash
+gomoku-instinct serve --ckpt <checkpoint> --port 8000
+```
+
+然后浏览器打开 `http://localhost:8000/`。棋盘是画出来的真棋盘：鼠标悬停会在落点上
+显示半透明的棋子和十字准星、四边坐标同步高亮，确认了再点。执黑时禁手点标红 ×。
+右侧有 AI 自评、候选手概率、可点击回看的棋谱。方向键 + 回车也能落子。
+
+服务端只用标准库的 `http.server`，没有额外依赖。**默认只监听回环地址** —— 页面没有
+任何认证，开发机通常是共享的。要从自己的机器访问，用 SSH 端口转发：
+
+```bash
+ssh -L 8000:127.0.0.1:8000 <开发机>     # 然后本地浏览器打开 http://localhost:8000/
+```
+
+`--host 0.0.0.0` 可以直接对同网段开放，风险自负。
+
+## 人机对战（命令行版）
 
 ```bash
 gomoku-instinct play --color black --ckpt <checkpoint>
@@ -106,6 +125,7 @@ gomoku_instinct/
   train/           trainer、replay buffer、损失
   eval/            竞技场、Elo、规则基线对手
   cli/             命令行入口与人机对战
+  web/             网页版对战（标准库 http.server + 单页前端）
 scripts/           容器启动、训练编排、评测与剖析
 tests/             规则差分测试、优化器数值测试等
 ```

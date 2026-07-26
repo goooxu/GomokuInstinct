@@ -22,6 +22,19 @@ def _cmd_play(args) -> int:
     )
 
 
+def _cmd_serve(args) -> int:
+    from ..web import serve
+
+    return serve(
+        args.ckpt,
+        host=args.host,
+        port=args.port,
+        device=args.device,
+        safe_mode=args.safe_mode,
+        temperature=args.temperature,
+    )
+
+
 def _cmd_arena(args) -> int:
     from ..core import load_core
     from ..eval import GreedyThreatPlayer, RandomPlayer, play_match
@@ -110,6 +123,20 @@ def main(argv: list[str] | None = None) -> int:
         help="cursor 用方向键选点（默认，需要真正的终端）；text 逐行输入坐标",
     )
     play_parser.set_defaults(func=_cmd_play)
+
+    serve_parser = sub.add_parser("serve", help="启动网页版对战")
+    serve_parser.add_argument("--ckpt", required=True, help="checkpoint 文件或 run 目录")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="默认只监听回环地址。页面没有认证，开发机通常是共享的 —— "
+             "要从别的机器访问，优先用 SSH 端口转发",
+    )
+    serve_parser.add_argument("--safe-mode", action="store_true",
+                              help="用规则替 AI 屏蔽禁手点。默认关闭")
+    serve_parser.add_argument("--temperature", type=float, default=0.0)
+    serve_parser.set_defaults(func=_cmd_serve)
 
     arena_parser = sub.add_parser("arena", help="模型间/对基线的批量对局与 Elo 估计")
     arena_parser.add_argument("--a", required=True,

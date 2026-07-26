@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gomoku-instinct</title>
+<style>
+  :root {
+    --wood: #e3bd7c;
+    --wood-edge: #c99b56;
+    --line: #6b4a22;
+    --ink: #23201c;
+    --muted: #7b7369;
+    --panel: #faf7f2;
+    --border: #e2dbd0;
+    --accent: #b3452e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #f3efe8; color: var(--ink);
+    font: 14px/1.6 system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  }
+  #app { display: flex; gap: 20px; padding: 16px; align-items: flex-start; }
+  #boardWrap { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; }
+  canvas { touch-action: manipulation; border-radius: 6px;
+           box-shadow: 0 2px 12px rgba(0,0,0,.18); cursor: pointer; }
+  canvas.readonly { cursor: default; }
+
+  #panel { flex: 0 0 300px; background: var(--panel); border: 1px solid var(--border);
+           border-radius: 8px; padding: 14px 16px; }
+  h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .02em; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  button, select {
+    font: inherit; padding: 5px 11px; border-radius: 6px; border: 1px solid var(--border);
+    background: #fff; color: var(--ink); cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #f0ece5; }
+  button:disabled { opacity: .45; cursor: default; }
+  label.chk { display: flex; align-items: center; gap: 6px; font-size: 13px;
+              color: #4a453e; cursor: pointer; }
+
+  #status { font-size: 15px; font-weight: 600; min-height: 1.6em; }
+  #status.over { color: var(--accent); }
+  #msg { color: var(--accent); font-size: 13px; min-height: 1.5em; }
+
+  .sec { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px; }
+  .sec h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px;
+            letter-spacing: .06em; }
+
+  .bar { height: 8px; border-radius: 4px; background: #e6e1d8; position: relative;
+         overflow: hidden; margin: 4px 0 2px; }
+  .bar i { position: absolute; top: 0; bottom: 0; background: #55606e; }
+  .barnum { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .cand { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 1px 0;
+          font-variant-numeric: tabular-nums; }
+  .cand b { width: 34px; font-weight: 600; }
+  .cand .g { flex: 1; height: 6px; background: #e6e1d8; border-radius: 3px; }
+  .cand .g i { display: block; height: 100%; background: #6f8ab0; border-radius: 3px; }
+  .cand span { width: 40px; text-align: right; color: var(--muted); }
+
+  #moves { max-height: 190px; overflow-y: auto; font-size: 13px;
+           font-variant-numeric: tabular-nums; }
+  #moves div { display: flex; gap: 6px; padding: 1px 0; }
+  #moves b { width: 26px; color: var(--muted); font-weight: 400; text-align: right; }
+  #moves a { flex: 1; cursor: pointer; padding: 0 4px; border-radius: 3px; color: var(--ink);
+             text-decoration: none; }
+  #moves a:hover { background: #ece7de; }
+  #moves a.cur { background: #d9e3f0; font-weight: 600; }
+  #moves a.bad { color: var(--accent); }
+  #review { display: none; font-size: 13px; color: var(--accent); align-items: center;
+            gap: 8px; margin-top: 6px; }
+  .tip { font-size: 12px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="boardWrap"><canvas id="board"></canvas></div>
+
+  <div id="panel">
+    <h1>gomoku-instinct</h1>
+    <div class="sub" id="meta">载入中……</div>
+
+    <div id="status"></div>
+    <div id="msg"></div>
+
+    <div class="row">
+      <select id="color">
+        <option value="black">我执黑（先手）</option>
+        <option value="white">我执白（后手）</option>
+      </select>
+      <button id="new">新局</button>
+    </div>
+    <div class="row">
+      <button id="undo">悔棋</button>
+      <button id="hint">提示</button>
+      <button id="resign">认输</button>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="showNum"> 手数</label>
+      <label class="chk"><input type="checkbox" id="showCand"> AI 候选</label>
+    </div>
+
+    <div class="sec" id="evalSec" style="display:none">
+      <h2 id="evalTitle">AI 自评</h2>
+      <div class="bar"><i id="evalBar"></i></div>
+      <div class="barnum" id="evalNum"></div>
+      <div id="cands" style="margin-top:6px"></div>
+    </div>
+
+    <div class="sec">
+      <h2>棋谱</h2>
+      <div id="moves"></div>
+      <div id="review"><span id="reviewTxt"></span><button id="toEnd">回到最新</button></div>
+    </div>
+
+    <div class="tip">
+      鼠标悬停会在落点上显示半透明的棋子和十字准星，确认后再点。<br>
+      方向键也能移动落点，回车落子。
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ── 状态 ────────────────────────────────────────────────────────────────────
+let S = null;            // 服务端返回的对局状态
+let viewPly = null;      // 复盘中查看的手数；null 表示看最新局面
+let hover = null;        // 鼠标/键盘指到的点
+let pending = false;     // 有请求在飞
+let px = 0, cell = 0;    // 画布边长与格距
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("board"), ctx = canvas.getContext("2d");
+
+// ── 与服务端通信 ────────────────────────────────────────────────────────────
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json();
+  if (res.status === 410) {          // 会话没了（服务重启/被淘汰），自动开新局
+    await newGame();
+    throw new Error(data.error);
+  }
+  if (!res.ok) throw new Error(data.error || "请求失败");
+  return data;
+}
+
+function setState(next) {
+  S = next;
+  viewPly = null;
+  render();
+}
+
+async function guard(fn) {
+  if (pending) return;
+  pending = true;
+  $("msg").textContent = "";
+  render();
+  try {
+    setState(await fn());
+  } catch (err) {
+    $("msg").textContent = err.message || String(err);
+  } finally {
+    pending = false;
+    render();
+  }
+}
+
+const newGame = () => guard(() => api("/api/new", { color: $("color").value }));
+
+// ── 绘制 ────────────────────────────────────────────────────────────────────
+function resize() {
+  if (!S) return;
+  const wrap = $("boardWrap");
+  const avail = Math.min(wrap.clientWidth, window.innerHeight - 34);
+  px = Math.max(280, Math.floor(avail));
+  cell = px / (S.size + 1);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = px * dpr;
+  canvas.height = px * dpr;
+  canvas.style.width = canvas.style.height = px + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+const cx = (c) => cell * (c + 1);
+const cy = (r) => cell * (r + 1);
+const colLabel = (c) => String.fromCharCode(65 + c);
+const rowLabel = (r) => String(S.size - r);
+
+// 复盘时按手数前缀重建局面，不必回服务端要
+function shownGrid() {
+  if (viewPly === null) return S.grid;
+  const g = new Array(S.size * S.size).fill(0);
+  for (let i = 0; i < viewPly; i++) g[S.history[i].move] = S.history[i].color;
+  return g;
+}
+const shownLast = () =>
+  viewPly === null ? S.last_move
+  : viewPly > 0 ? S.history[viewPly - 1].move : null;
+
+function drawStone(c, r, color, alpha) {
+  const x = cx(c), y = cy(r), rad = cell * 0.455;
+  ctx.save();
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  if (alpha === undefined) {
+    ctx.shadowColor = "rgba(0,0,0,.35)";
+    ctx.shadowBlur = cell * 0.14;
+    ctx.shadowOffsetY = cell * 0.05;
+  }
+  const black = color === S.colors.black;
+  const g = ctx.createRadialGradient(
+    x - rad * 0.35, y - rad * 0.4, rad * 0.1, x, y, rad * 1.05);
+  if (black) { g.addColorStop(0, "#6d6d6d"); g.addColorStop(1, "#0d0d0d"); }
+  else { g.addColorStop(0, "#ffffff"); g.addColorStop(1, "#cdc7bd"); }
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, rad, 0, Math.PI * 2);
+  ctx.fill();
+  if (!black) {
+    ctx.shadowColor = "transparent";
+    ctx.strokeStyle = "rgba(0,0,0,.22)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function draw() {
+  if (!S) return;
+  const N = S.size, grid = shownGrid(), last = shownLast();
+  const readonly = viewPly !== null || !isMyTurn();
+
+  // 木纹底
+  const bg = ctx.createLinearGradient(0, 0, px, px);
+  bg.addColorStop(0, "#eccf95");
+  bg.addColorStop(1, "#d9ad6b");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, px, px);
+
+  // 悬停的十字准星，画在格线之下，避免盖住棋子
+  if (hover !== null && !readonly) {
+    const hc = hover % N, hr = (hover - hc) / N;
+    ctx.fillStyle = "rgba(255,255,255,.34)";
+    ctx.fillRect(cx(hc) - cell * 0.5, 0, cell, px);
+    ctx.fillRect(0, cy(hr) - cell * 0.5, px, cell);
+  }
+
+  // 格线
+  ctx.strokeStyle = "#6b4a22";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < N; i++) {
+    const v = Math.round(cx(i)) + 0.5;
+    ctx.moveTo(v, cy(0)); ctx.lineTo(v, cy(N - 1));
+    const h = Math.round(cy(i)) + 0.5;
+    ctx.moveTo(cx(0), h); ctx.lineTo(cx(N - 1), h);
+  }
+  ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.strokeRect(Math.round(cx(0)) + .5, Math.round(cy(0)) + .5,
+                 Math.round(cx(N - 1) - cx(0)), Math.round(cy(N - 1) - cy(0)));
+
+  // 星位
+  if (N === 15) {
+    ctx.fillStyle = "#5d3f1c";
+    for (const [r, c] of [[3,3],[3,11],[11,3],[11,11],[7,7]]) {
+      ctx.beginPath();
+      ctx.arc(cx(c), cy(r), cell * 0.09, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 坐标：上下左右四边都标，减少来回找行列的眼动
+  ctx.font = `${Math.round(cell * 0.4)}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const hc = hover === null ? -1 : hover % N;
+  const hr = hover === null ? -1 : (hover - (hover % N)) / N;
+  for (let i = 0; i < N; i++) {
+    ctx.fillStyle = (i === hc && !readonly) ? "#a03a22" : "#7a5527";
+    ctx.fillText(colLabel(i), cx(i), cell * 0.45);
+    ctx.fillText(colLabel(i), cx(i), px - cell * 0.45);
+    ctx.fillStyle = (i === hr && !readonly) ? "#a03a22" : "#7a5527";
+    ctx.fillText(rowLabel(i), cell * 0.45, cy(i));
+    ctx.fillText(rowLabel(i), px - cell * 0.45, cy(i));
+  }
+
+  // 禁手点
+  if (S.forbidden && viewPly === null) {
+    ctx.strokeStyle = "#c62828";
+    ctx.lineWidth = Math.max(1.5, cell * 0.07);
+    ctx.lineCap = "round";
+    const d = cell * 0.2;
+    for (let i = 0; i < S.forbidden.length; i++) {
+      if (!S.forbidden[i] || grid[i] !== 0) continue;
+      const c = i % N, r = (i - c) / N;
+      ctx.beginPath();
+      ctx.moveTo(cx(c) - d, cy(r) - d); ctx.lineTo(cx(c) + d, cy(r) + d);
+      ctx.moveTo(cx(c) + d, cy(r) - d); ctx.lineTo(cx(c) - d, cy(r) + d);
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+  }
+
+  // AI 候选（仅当前局面）
+  if ($("showCand").checked && S.analysis && viewPly === null) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `${Math.round(cell * 0.3)}px system-ui, sans-serif`;
+    for (const cd of S.analysis.top) {
+      if (grid[cd.move] !== 0) continue;
+      const c = cd.move % N, r = (cd.move - c) / N;
+      ctx.fillStyle = `rgba(40,90,180,${0.15 + 0.5 * cd.prob})`;
+      ctx.beginPath();
+      ctx.arc(cx(c), cy(r), cell * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.fillText(Math.round(cd.prob * 100) + "", cx(c), cy(r));
+    }
+  }
+
+  // 棋子
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] === 0) continue;
+    const c = i % N, r = (i - c) / N;
+    drawStone(c, r, grid[i]);
+  }
+
+  // 手数
+  if ($("showNum").checked) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `600 ${Math.round(cell * 0.34)}px system-ui, sans-serif`;
+    const upto = viewPly === null ? S.history.length : viewPly;
+    for (let i = 0; i < upto; i++) {
+      const h = S.history[i], c = h.move % N, r = (h.move - c) / N;
+      ctx.fillStyle = h.color === S.colors.black ? "#e8e4dc" : "#2a2a2a";
+      ctx.fillText(String(i + 1), cx(c), cy(r));
+    }
+  }
+
+  // 最后一手
+  if (last !== null && last !== undefined && grid[last]) {
+    const c = last % N, r = (last - c) / N;
+    ctx.strokeStyle = "#d43b26";
+    ctx.lineWidth = Math.max(1.5, cell * 0.055);
+    ctx.beginPath();
+    ctx.arc(cx(c), cy(r), cell * 0.24, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // 悬停的幽灵子
+  if (hover !== null && !readonly && grid[hover] === 0) {
+    const c = hover % N, r = (hover - c) / N;
+    drawStone(c, r, S.human, 0.42);
+  }
+
+  canvas.classList.toggle("readonly", readonly);
+}
+
+// ── 面板 ────────────────────────────────────────────────────────────────────
+const isMyTurn = () =>
+  S && S.outcome === "ongoing" && S.to_move === S.human && !pending;
+
+function statusText() {
+  if (S.outcome !== "ongoing") {
+    if (S.resigned !== null && S.resigned !== undefined) return "你认输了。";
+    if (S.outcome === "draw") return "和棋。";
+    const blackWon = S.outcome === "black_win";
+    const iWon = (blackWon ? S.colors.black : S.colors.white) === S.human;
+    const bad = S.history.length && S.history[S.history.length - 1].forbidden;
+    const why = bad ? "（禁手判负）" : "";
+    return (blackWon ? "黑胜" : "白胜") + why + " —— " + (iWon ? "你赢了。" : "AI 赢了。");
+  }
+  if (pending) return "AI 思考中……";
+  return S.to_move === S.human ? "轮到你了。" : "AI 思考中……";
+}
+
+function render() {
+  if (!S) return;
+  $("meta").textContent =
+    `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手　零搜索`;
+  $("status").textContent = statusText();
+  $("status").classList.toggle("over", S.outcome !== "ongoing");
+
+  const over = S.outcome !== "ongoing";
+  $("undo").disabled = pending || !S.history.length;
+  $("hint").disabled = pending || over;
+  $("resign").disabled = pending || over;
+  $("new").disabled = pending;
+  $("color").value = S.human === S.colors.white ? "white" : "black";
+
+  // 评估
+  const a = S.analysis;
+  $("evalSec").style.display = a ? "" : "none";
+  if (a) {
+    const side = a.value_color === S.colors.black ? "黑" : "白";
+    const mine = a.value_color === S.human;
+    $("evalTitle").textContent = mine ? `局面评估（${side}方，也就是你）`
+                                      : `AI 自评（${side}方）`;
+    const v = Math.max(-1, Math.min(1, a.value));
+    const bar = $("evalBar");
+    bar.style.left = (v >= 0 ? 50 : 50 + v * 50) + "%";
+    bar.style.width = Math.abs(v) * 50 + "%";
+    bar.style.background = v >= 0 ? "#4f7a4a" : "#a34a3c";
+    $("evalNum").textContent =
+      `${v >= 0 ? "+" : ""}${v.toFixed(3)}　（+1 表示${side}方必胜）`;
+    $("cands").innerHTML = a.top.map((cd) =>
+      `<div class="cand"><b>${cd.label}</b>` +
+      `<span class="g"><i style="width:${(cd.prob * 100).toFixed(0)}%"></i></span>` +
+      `<span>${(cd.prob * 100).toFixed(1)}%</span></div>`).join("");
+  }
+
+  // 棋谱
+  const cur = viewPly === null ? S.history.length : viewPly;
+  $("moves").innerHTML = S.history.map((h, i) =>
+    `<div><b>${i + 1}</b><a data-ply="${i + 1}" ` +
+    `class="${i + 1 === cur ? "cur" : ""} ${h.forbidden ? "bad" : ""}">` +
+    `${h.color === S.colors.black ? "●" : "○"} ${h.label}` +
+    `${h.forbidden ? " 禁手" : ""}</a></div>`).join("") ||
+    `<div style="color:var(--muted)">还没落子</div>`;
+  $("review").style.display = viewPly === null ? "none" : "flex";
+  $("reviewTxt").textContent = viewPly === null ? "" : `复盘中：第 ${viewPly} 手`;
+
+  draw();
+}
+
+// ── 交互 ────────────────────────────────────────────────────────────────────
+function pointAt(ev) {
+  const rect = canvas.getBoundingClientRect();
+  const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+  const c = Math.round(x / cell - 1), r = Math.round(y / cell - 1);
+  if (c < 0 || r < 0 || c >= S.size || r >= S.size) return null;
+  // 离交叉点太远就不认，避免边缘误判成邻格
+  if (Math.hypot(x - cx(c), y - cy(r)) > cell * 0.62) return null;
+  return r * S.size + c;
+}
+
+canvas.addEventListener("pointermove", (ev) => {
+  if (!S) return;
+  const p = pointAt(ev);
+  if (p !== hover) { hover = p; draw(); }
+});
+canvas.addEventListener("pointerleave", () => { hover = null; draw(); });
+
+canvas.addEventListener("pointerdown", (ev) => {
+  if (!S || !isMyTurn() || viewPly !== null) return;
+  const p = pointAt(ev);
+  if (p === null || S.grid[p] !== 0) return;
+  hover = p;
+  guard(() => api("/api/move", { sid: S.sid, move: p }));
+});
+
+// 键盘：方向键挪落点、回车落子，和 CLI 的光标模式保持一致的手感
+document.addEventListener("keydown", (ev) => {
+  if (!S) return;
+  const N = S.size;
+  if (ev.key === "ArrowLeft" || ev.key === "ArrowRight" ||
+      ev.key === "ArrowUp" || ev.key === "ArrowDown") {
+    if (hover === null) hover = ((N >> 1) * N) + (N >> 1);
+    else {
+      let c = hover % N, r = (hover - c) / N;
+      if (ev.key === "ArrowLeft") c = Math.max(0, c - 1);
+      if (ev.key === "ArrowRight") c = Math.min(N - 1, c + 1);
+      if (ev.key === "ArrowUp") r = Math.max(0, r - 1);
+      if (ev.key === "ArrowDown") r = Math.min(N - 1, r + 1);
+      hover = r * N + c;
+    }
+    ev.preventDefault();
+    draw();
+  } else if (ev.key === "Enter" && hover !== null && isMyTurn() && viewPly === null) {
+    if (S.grid[hover] === 0) guard(() => api("/api/move", { sid: S.sid, move: hover }));
+  } else if (ev.key === "Escape" && viewPly !== null) {
+    viewPly = null; render();
+  }
+});
+
+$("new").onclick = newGame;
+$("undo").onclick = () => guard(() => api("/api/undo", { sid: S.sid }));
+$("hint").onclick = () => guard(() => api("/api/hint", { sid: S.sid }));
+$("resign").onclick = () => guard(() => api("/api/resign", { sid: S.sid }));
+$("showNum").onchange = draw;
+$("showCand").onchange = draw;
+$("toEnd").onclick = () => { viewPly = null; render(); };
+$("moves").onclick = (ev) => {
+  const ply = ev.target.dataset && ev.target.dataset.ply;
+  if (!ply) return;
+  const n = Number(ply);
+  viewPly = (viewPly === n) ? null : n;   // 再点一次回到最新
+  render();
+};
+window.addEventListener("resize", resize);
+
+newGame().then(resize);
+</script>
+</body>
+</html>

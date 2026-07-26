@@ -317,3 +317,71 @@ def test_static_cache_picks_up_edits(tmp_path, server):
         with open(path, "wb") as fh:
             fh.write(original)
         srv._STATIC_CACHE.clear()
+
+
+# ── 前端静态检查 ────────────────────────────────────────────────────────────
+#
+# 容器里没有 JS 运行时，前端跑不了真正的单元测试。下面两条是把已经踩过的两个
+# bug 写成不变量做静态检查 —— 挡不住所有前端问题，但至少挡住这两类复发。
+
+
+def _function_body(text: str, marker: str) -> str:
+    """取出 marker 之后第一对大括号里的内容（按括号配对，不靠缩进猜）。"""
+    start = text.index(marker)
+    depth, i = 0, text.index("{", start)
+    begin = i
+    while True:
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[begin:i]
+        i += 1
+
+
+def _strip_comments(text: str) -> str:
+    """去掉 // 行注释 —— 不然解释 bug 的注释本身会把检查判红。"""
+    import re
+
+    return re.sub(r"//.*", "", text)
+
+
+def _page() -> str:
+    import os
+
+    from gomoku_instinct.web import server as srv
+
+    with open(os.path.join(srv.STATIC_DIR, "index.html")) as fh:
+        return fh.read()
+
+
+def test_render_never_writes_back_to_input_controls():
+    """render() 不能回写任何输入控件。
+
+    guard() 在发请求前会先 render() 一次。render() 里只要有一句往 <select>/<input>
+    回写，用户刚做的选择就会在被读到之前被抹掉 —— 实际后果是「永远开不出白棋局」，
+    而且不报任何错，点下去只是又开了一局黑棋。
+    """
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function render()"))
+    offenders = re.findall(r'\$\("([^"]+)"\)\.(value|checked)\s*=(?!=)', body)
+    assert not offenders, f"render() 回写了输入控件: {offenders}"
+
+
+def test_api_error_recovery_does_not_reenter_guard():
+    """api() 的失效恢复路径不能再走 guard()。
+
+    guard() 开头就是 `if (pending) return;`，而 api() 只会在 guard() 内部被调用，
+    此时 pending 必为 true。在这里调 newGame() 等于什么都没做，用户会卡死在一个
+    已失效的对局上 —— 同样不报错。
+    """
+    body = _strip_comments(_function_body(_page(), "async function api("))
+    for call in ("guard(", "newGame(", "startGame("):
+        assert call not in body, f"api() 里不该调用 {call}"
+
+
+def test_color_select_offers_both_sides():
+    page = _page()
+    assert 'value="black"' in page and 'value="white"' in page

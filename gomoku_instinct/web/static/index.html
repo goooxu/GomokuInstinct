@@ -143,9 +143,17 @@ async function api(path, body) {
     body: JSON.stringify(body || {}),
   });
   const data = await res.json();
-  if (res.status === 410) {          // 会话没了（服务重启/被淘汰），自动开新局
-    await newGame();
-    throw new Error(data.error);
+  if (res.status === 410) {
+    // 会话没了（服务重启或被淘汰）。这里不能调 newGame()：它走 guard()，而此刻
+    // pending 已经是 true，guard 会直接 return，新局根本开不出来，用户就卡死在
+    // 一个已失效的对局上。直接请求并把新状态返回给调用方。
+    const fresh = await fetch("/api/new", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ color: $("color").value }),
+    }).then((r) => r.json());
+    $("msg").textContent = "上一局已失效（服务重启过），已为你开新局。";
+    return fresh;
   }
   if (!res.ok) throw new Error(data.error || "请求失败");
   return data;
@@ -172,7 +180,8 @@ async function guard(fn) {
   }
 }
 
-const newGame = () => guard(() => api("/api/new", { color: $("color").value }));
+const startGame = (color) => guard(() => api("/api/new", { color }));
+const newGame = () => startGame($("color").value);
 
 // ── 绘制 ────────────────────────────────────────────────────────────────────
 function resize() {
@@ -395,7 +404,9 @@ function render() {
   $("hint").disabled = pending || over;
   $("resign").disabled = pending || over;
   $("new").disabled = pending;
-  $("color").value = S.human === S.colors.white ? "white" : "black";
+  // 注意：这里**不能**去写 $("color").value。它是"下一局用什么颜色"的输入控件，
+  // 不是当前状态的显示。guard() 在发请求前会先 render() 一次，一旦在这里回写，
+  // 用户刚选的颜色就会在被读到之前被抹掉 —— 表现为"永远开不出白棋局"。
 
   // 评估
   const a = S.analysis;
@@ -483,6 +494,15 @@ document.addEventListener("keydown", (ev) => {
 });
 
 $("new").onclick = newGame;
+$("color").onchange = () => {
+  // 选颜色就是想用那个颜色下 —— 中途换色没有意义，直接开新局。已经落过子的先问一句。
+  if (S && S.history.length &&
+      !confirm("换颜色要重新开一局，当前这局就没了。继续？")) {
+    $("color").value = S.human === S.colors.white ? "white" : "black";
+    return;
+  }
+  newGame();
+};
 $("undo").onclick = () => guard(() => api("/api/undo", { sid: S.sid }));
 $("hint").onclick = () => guard(() => api("/api/hint", { sid: S.sid }));
 $("resign").onclick = () => guard(() => api("/api/resign", { sid: S.sid }));

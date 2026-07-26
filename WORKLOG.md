@@ -45,7 +45,7 @@ AlphaZero 类方法的棋力一半来自网络、一半来自 MCTS。把 MCTS �
 
 ### 环境确认
 
-开发机为 aarch64 架构的 Grace-Blackwell 节点，4 卡全 NVLink 互联，两个 CPU socket 与 GPU 的 NUMA 亲和划分干净（前半 GPU 对应前半 CPU 核，后半同理）。据此把 trainer 与 self-play actor 按 socket 物理隔离，避免跨 socket 争抢内存带宽。内存容量足以让 replay buffer 整个常驻，磁盘仅作容灾落盘。
+开发机为 aarch64 架构的 Grace-Blackwell 节点，4 卡全 NVLink 互联，两个 CPU socket 与 GPU 的 NUMA 亲和划分干净（前半 GPU 对应前半 CPU 核，后半同理）。原计划据此把 trainer 与 self-play actor 按 socket 物理隔离（后来只做了核数均分，未真正绑定，见 M6 的更正）。内存容量足以让 replay buffer 整个常驻，磁盘仅作容灾落盘。
 
 因为是 aarch64，C++ 扩展需按 arm64 编译；统一在容器内构建，本机只做文件修改与 git 操作。
 
@@ -415,8 +415,12 @@ GPU 1-3 actor     热加载最新权重 -> 自博弈 -> 写分片
 最新状态接上。换机时把进程停掉、在新机器上跑同一条启动命令即可 ——
 工作目录路径两机一致，checkpoint 与分片都在原地。
 
-资源按 NUMA 亲和切分：同一 socket 上的 GPU 与 CPU 核绑在一起，避免跨 socket
-抢内存带宽。每个 actor 一套独立的随机流，否则几张卡会跑出一模一样的对局。
+每个 actor 一套独立的随机流，否则几张卡会跑出一模一样的对局。
+
+（**更正**：早先这里写的是「资源按 NUMA 亲和切分、同一 socket 上的 GPU 与 CPU 核绑在一起」，
+与实际不符 —— 启动脚本只把核**数量**均分给各 actor，并没有调用 numactl 做绑定。
+后来的流水线剖析显示 actor 侧 96% 的时间花在 GPU 前向、CPU 树搜索只占 3.3%，
+NUMA 绑定因此不是当前瓶颈，但把它写成已完成是不对的。）
 
 启动后实测：三张 actor 卡利用率 82~86%（关闭认输后到 100%），
 trainer 卡在样本攒够之前保持空闲（`min_positions_to_start` 未达成时不训练，

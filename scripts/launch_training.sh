@@ -5,9 +5,13 @@
 #   ./scripts/launch_training.sh runs/renju15 status   # 看谁在跑
 #   ./scripts/launch_training.sh runs/renju15 stop     # 停止
 #
-# 分工按 GPU 与 CPU 的 NUMA 亲和来切：同一 socket 上的 GPU 与 CPU 核绑在一起，
-# 避免跨 socket 抢内存带宽。actor 与 trainer 之间除了文件系统没有任何耦合 ——
-# 任一侧崩了另一侧照常跑，重启后各自从最新状态接上。
+# actor 与 trainer 之间除了文件系统没有任何耦合 —— 任一侧崩了另一侧照常跑，
+# 重启后各自从最新状态接上。
+#
+# 注意：这里只把 CPU 核**数量**均分给各 actor，并**没有**按 NUMA 亲和做绑定
+# （没有调用 numactl）。跨 socket 的内存带宽争抢因此仍然存在。
+# 实测 actor 侧 96% 的时间花在 GPU 前向上、CPU 树搜索只占 3.3%，
+# 所以这件事目前不是瓶颈；真要优化应先做 CUDA Graph。
 #
 # 进程管理走 **docker 容器名**，不走 pid：杀掉 docker run 客户端进程并不会停掉
 # 容器，只按 pid 管理会导致每次「停止再启动」都叠加一层，多个 trainer 争抢

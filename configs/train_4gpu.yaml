@@ -1,66 +1,44 @@
-# 4 卡节点上的训练编排。所有 null 项在启动时自动探测硬件填充。
-run:
-  run_dir: runs            # 相对工作目录
-  run_id: null             # null = 自动生成；指定则续训该 run
-  seed: 20260725
+# 4 卡节点上的训练编排。
+#
+# 本文件里的每一项都**确实被代码读取**。曾经有一段时间这里堆了不少只有配置、
+# 没有实现的键（失误挖掘就是一例：配置写得齐全，代码里一处引用都没有，
+# 读配置的人会以为它在生效）。现在的约定是：要么实现，要么删掉，
+# 要么在键名旁明确标注「尚未实现」。
 
-# ── 资源编排 ───────────────────────────────────────────────────────────────
-# trainer 与 self-play actor 按 CPU socket 物理隔离，避免跨 socket 争抢内存带宽。
-# actor 的 CPU 核范围取所绑 GPU 的 NUMA 亲和核集，启动时由 numactl 绑定。
-resources:
-  auto_detect: true        # 探测 GPU 数、CPU 核数、NUMA 亲和，校验下面的配置
-  trainer:
-    gpus: [0]              # 若 trainer 成为瓶颈，改成 [0, 1] 走 DDP
-    cpu_workers: 16        # dataloader / 数据增强线程
-  actors:
-    - {gpu: 1, cpu_workers: null}
-    - {gpu: 2, cpu_workers: null}
-    - {gpu: 3, cpu_workers: null, run_arena: true}
-  numa_bind: true
+run:
+  seed: 20260725
 
 # ── 自博弈 ─────────────────────────────────────────────────────────────────
 selfplay:
-  games_in_flight: 2048    # 每个 actor 同时推进的对局数（喂饱 GPU 批量）
-  eval_batch: 2048         # 送去 GPU 的定长批大小，用于 CUDA Graph 捕获
-  cuda_graph: true
+  games_in_flight: 2048    # 每个 actor 同时推进的对局数，同时也是 GPU 批大小
 
   mcts:
-    sims: 400              # 教师强度；后期由 schedule 提到 800~1600
+    sims: 400              # 完整搜索的模拟数（教师强度）
     c_puct: 1.6
-    c_puct_base: 19652
-    virtual_loss: 3
     dirichlet_alpha: 0.15  # 15x15 分支因子对应的经验取值
     dirichlet_eps: 0.25
     fpu_reduction: 0.25
 
-    # playout cap randomization：少数手用满 sims 并产生训练目标，
-    # 多数手用低 sims 只负责推进对局，显著提高单位算力下的目标产量
+    # playout cap randomization：少数手用满 sims 并产出训练目标，
+    # 多数手用低 sims 只负责推进对局，同样算力下目标产量高得多。
     full_search_prob: 0.25
     fast_sims: 100
 
   temperature:
     initial: 1.0
     moves: 16              # 前 16 手用 T=1 保证开局多样性
-    final: 0.0
 
   resign:
-    # 训练初期关闭。随机初始化的价值头没有任何判断力，此时认输就是在瞎判，
-    # 会让训练数据里的价值目标整体走样。价值头训出准度后再打开，
-    # 打开时务必盯住 audit 出来的误判率。
+    # 训练初期必须关闭。随机初始化的价值头没有判断力，此时认输就是瞎判，
+    # 会让训练数据里的价值目标整体走样 —— 实测开着跑时，价值头的随机偏向
+    # 会把某一方的胜率推到极端。价值头训出准度后再打开，并盯住 audit 出的误判率。
     enabled: false
     threshold: -0.92
-    # 保留一部分不认输的对局用于审计认输误判率
-    audit_fraction: 0.05
-    max_false_positive_rate: 0.02
+    audit_fraction: 0.05   # 保留一部分不认输的对局用于审计误判率
 
-  # 「部署分布自博弈」：这部分对局由零搜索策略执行落子，但训练目标仍由 MCTS 生成。
+  # 部署分布自博弈：这部分对局由**零搜索策略**执行落子，但训练目标仍由 MCTS 生成。
   # 目的是让 buffer 覆盖到部署时真正会走进去的局面，消除训练/部署分布漂移。
   deployment_distribution_fraction: 0.25
-
-  mcts_sims_schedule:
-    - {step: 0,      sims: 400}
-    - {step: 300000, sims: 800}
-    - {step: 800000, sims: 1600}
 
 # ── Replay buffer ──────────────────────────────────────────────────────────
 replay:
@@ -68,69 +46,45 @@ replay:
   min_positions_to_start: 50000
   shard_positions: 65536        # 每个落盘分片的局面数
   disk_keep_shards: 400         # 磁盘上保留的分片数，超出即回收
-  symmetry_augment: true        # 8 重二面体对称（纯规则免费增强）
 
-  # 失误挖掘：原始策略 argmax 与 MCTS 最优手价值差距大的局面加权过采样。
-  #
+  # 失误挖掘：把「零搜索会走错且错得厉害」的局面定向塞进每个批次。
   # 信号取「搜索认定的最优手」与「零搜索策略会选的那手」的 Q 差，两者在树里现成。
-  # 差得越大，说明这个局面上「没有搜索就会走错」越严重 —— 而这类局面在全体样本里
-  # 占比很小，均匀采样几乎碰不到，正是策略缺前瞻能力的地方。
+  # 这类局面在全体样本里只占百分之几，均匀采样几乎碰不到，
+  # 而它们恰恰是策略缺前瞻能力的地方。
   blunder_mining:
     enabled: true
     value_gap_threshold: 0.15
-    oversample_weight: 4.0
     max_fraction_of_batch: 0.2
 
 # ── 训练 ───────────────────────────────────────────────────────────────────
 train:
   batch_size: 1024
-  # 按实际训练量设：原来配 200 万，余弦衰减几乎不启动，学习率一直停在初值
+  # 按实际训练量设。曾经配 200 万，导致余弦衰减几乎不启动、学习率长期停在初值。
   max_steps: 120000
   compile: true                 # torch.compile 训练 step
 
-  # 每个周期训练多少步不是写死的，而是按目标样本复用率自适应算出来。
+  # 每周期训练多少步不是写死的，而是按目标样本复用率自适应算出来。
   # 自博弈比训练贵得多（一手棋要几百次网络评估），固定配比极易失衡：
   # 实测按固定配比跑，复用率会飙到 20 以上，等于每条样本被反复训练二十几遍。
   target_sample_reuse: 4.0
   max_train_steps_per_cycle: 400
   selfplay_steps_per_cycle: 200
 
+  # 多卡编排：自博弈交给独立的 actor 进程，trainer 只扫描它们写出的分片。
+  # 由 launch_training.sh 设置；单进程跑通全链路时保持 false。
+  external_selfplay: false
+
   optim:
-    name: bf16_adamw            # 主权重 BF16 + Kahan 补偿求和
     lr: 2.0e-3
     betas: [0.9, 0.95]
     eps: 1.0e-8
     weight_decay: 1.0e-4
     grad_clip: 1.0
     rounding: kahan             # kahan | stochastic | none（none 仅用于对照实验）
-    moment_dtype: float32       # Adam 一/二阶矩精度；主权重仍为 BF16
 
   lr_schedule:
     warmup_steps: 2000
-    schedule: cosine
     min_lr_scale: 0.05
-
-  # 权重发布：actor 定期热加载，不做同步 generation 屏障
-  publish_every_steps: 500
-
-# ── 评测 ───────────────────────────────────────────────────────────────────
-arena:
-  # 晋级评测一律在零搜索模式下进行 —— 与部署条件一致，否则会优化错目标
-  mode: raw_policy
-  games: 400
-  promote_winrate: 0.55
-  eval_every_steps: 5000
-
-  baselines:
-    - random               # 随机合法落子
-    - greedy_threat        # 规则基线：贪心连子 + 必防四三（非 AI，仅作绝对标尺）
-
-  # 本项目的头号指标：同一份权重，零搜索 vs MCTS 的 Elo 差
-  track_search_gap:
-    enabled: true
-    mcts_sims: 800
-    games: 200
-    every_steps: 20000
 
 # ── 容灾 ───────────────────────────────────────────────────────────────────
 checkpoint:
@@ -138,15 +92,26 @@ checkpoint:
   every_seconds: 600
   every_steps: 10000
   keep_last: 10
-  keep_best: 5
-  atomic_write: true       # 先写 .tmp 再 rename
-
-resume:
-  auto: true               # 启动时自动检测最新 checkpoint 续训
-  strict: true             # 配置与 checkpoint 不一致时报错而非静默忽略
 
 logging:
-  metrics_jsonl: true
-  tensorboard: true
   log_every_steps: 50
-  heartbeat_seconds: 30    # supervisor 据此检测死进程并重启
+
+# ── 尚未实现 ───────────────────────────────────────────────────────────────
+# 以下是方案里设计过、但**代码尚未实现**的部分。留在这里只为记录意图，
+# 改动它们不会有任何效果。要用请先实现并挪到上面对应段落。
+not_implemented:
+  # 教师强度随训练推进提升。当前 sims 固定 400。
+  # policy loss 平台 + 威胁识别饱和 + top1 卡位，三者一起指向教师偏弱，
+  # 这是下一个值得动的杠杆。
+  mcts_sims_schedule: [{step: 0, sims: 400}, {step: 60000, sims: 800}]
+
+  # 定长批的 CUDA Graph 捕获。实测 actor 侧 96% 的时间花在 GPU 前向上，
+  # 这是提高自博弈产量最直接的方向。
+  cuda_graph: true
+
+  # 按 NUMA 亲和把 actor 绑到对应 socket 的 CPU 核上。
+  # launch_training.sh 目前只做了线程数均分，**没有调用 numactl**。
+  numa_bind: true
+
+  # 竞技场自动晋级（当前由 scripts/report.py 手工触发）
+  arena_promotion: {games: 400, promote_winrate: 0.55, every_steps: 5000}

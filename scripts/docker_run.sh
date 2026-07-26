@@ -39,6 +39,10 @@ opts=(
   -e TORCHINDUCTOR_CACHE_DIR="$INDUCTOR_DIR"
   -e TRITON_CACHE_DIR="$TRITON_DIR"
   -e PYTHONDONTWRITEBYTECODE=1
+  # 长任务的 stdout 被重定向到日志文件时是块缓冲的，几分钟内看不到任何新输出。
+  # 后果不只是"看着急"——日志是追加写的，读到的会是上一次运行留下的旧行，
+  # 足以让人把一次正常的续训误判成失败。
+  -e PYTHONUNBUFFERED=1
   # 容器以宿主 uid 运行，而该 uid 在容器的 /etc/passwd 里没有条目，
   # getpass.getuser() 会抛 KeyError，导致 torch._dynamo 首次导入失败、
   # 重试时又撞上「重复注册」——torch.compile 与 torch.optim 都会被带塌。

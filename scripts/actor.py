@@ -83,6 +83,7 @@ def main() -> int:
 
     # 等 trainer 写出第一个 checkpoint。actor 不自己造初始权重，
     # 免得不同进程从不同随机初始化出发、产出的样本互相打架。
+    print(f"\n===== {prefix} 启动 pid={os.getpid()} =====", flush=True)
     print(f"[{prefix}] 等待第一个 checkpoint……", flush=True)
     while latest_checkpoint(args.run_dir) is None:
         if args.max_seconds is not None:

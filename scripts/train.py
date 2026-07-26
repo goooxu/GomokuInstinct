@@ -91,6 +91,8 @@ def main() -> int:
         trainer_cfg.compile = False
 
     trainer = Trainer(trainer_cfg, model_cfg, loss_weights, args.run_dir, device, cfg)
+    # 日志是追加写的，起手打一条分隔线，读日志时才分得清是哪一次启动
+    print(f"\n===== trainer 启动 pid={os.getpid()} =====")
     print(trainer.model.parameter_summary())
     print(f"棋盘 {trainer_cfg.board_size}x{trainer_cfg.board_size}  设备 {device}")
 

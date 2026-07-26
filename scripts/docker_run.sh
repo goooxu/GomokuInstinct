@@ -23,6 +23,18 @@ INDUCTOR_DIR="$ROOT/build/inductor_cache"
 TRITON_DIR="$ROOT/build/triton_cache"
 mkdir -p "$CONTAINER_HOME" "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR"
 
+# 这些缓存内部记录的是**绝对路径**（ninja 构建文件、inductor 缓存索引等）。
+# 项目目录一旦被移动，旧缓存就会指向不存在的路径，而且报出来的错完全看不出根因
+# —— 实测是在 torch/_inductor/remote_cache.py 里对着旧路径 makedirs 时抛
+# PermissionError。所以记下缓存是为哪个根目录建的，根目录一变就整个清掉重建。
+ROOT_MARKER="$ROOT/build/.cache_root"
+if [ -f "$ROOT_MARKER" ] && [ "$(cat "$ROOT_MARKER")" != "$ROOT" ]; then
+  echo "检测到项目根目录已变更（原 $(cat "$ROOT_MARKER")），清理编译缓存……" >&2
+  rm -rf "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR"
+  mkdir -p "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR"
+fi
+echo "$ROOT" > "$ROOT_MARKER"
+
 opts=(
   --rm
   --gpus "$GPUS"

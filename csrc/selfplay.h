@@ -23,6 +23,7 @@
 #include "mcts.h"
 #include "position.h"
 #include "renju.h"
+#include "thread_pool.h"
 
 namespace gi {
 
@@ -156,7 +157,7 @@ class SelfPlayRunner {
   SelfPlayConfig cfg_;
   std::unique_ptr<Rules> rules_;
   std::vector<Slot> slots_;
-  std::unique_ptr<class ThreadPool> pool_;
+  std::unique_ptr<ThreadPool> pool_;
 };
 
 }  // namespace gi

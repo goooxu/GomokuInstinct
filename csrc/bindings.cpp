@@ -11,6 +11,7 @@
 #include "constants.h"
 #include "position.h"
 #include "renju.h"
+#include "search.h"
 #include "selfplay.h"
 
 namespace py = pybind11;
@@ -329,4 +330,84 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("reset_stats", &gi::SelfPlayRunner::reset_stats)
       .def("rng_state", &gi::SelfPlayRunner::rng_state)
       .def("set_rng_state", &gi::SelfPlayRunner::set_rng_state);
+
+  // ── 对任意局面的批量搜索 ─────────────────────────────────────────────────
+  py::class_<gi::BatchSearcher>(m, "BatchSearcher")
+      .def(py::init([](int board_size, int sims, int num_slots, float c_puct,
+                       float fpu_reduction, int num_threads,
+                       int forbidden_semantics, bool forbidden_enabled,
+                       int recursion_depth) {
+             gi::MctsConfig mcts;
+             mcts.c_puct = c_puct;
+             mcts.fpu_reduction = fpu_reduction;
+             gi::RuleConfig rules;
+             rules.forbidden_enabled = forbidden_enabled;
+             rules.recursion_depth = recursion_depth;
+             return new gi::BatchSearcher(
+                 board_size, sims, mcts, rules,
+                 static_cast<gi::ForbiddenSemantics>(forbidden_semantics),
+                 num_slots, num_threads);
+           }),
+           py::arg("board_size") = 15, py::arg("sims") = 800,
+           py::arg("num_slots") = 64, py::arg("c_puct") = 1.6f,
+           py::arg("fpu_reduction") = 0.25f, py::arg("num_threads") = 16,
+           py::arg("forbidden_semantics") = 0,
+           py::arg("forbidden_enabled") = true,
+           py::arg("recursion_depth") = 64)
+
+      .def_property_readonly("capacity", &gi::BatchSearcher::capacity)
+      .def_property_readonly("num_cells", &gi::BatchSearcher::num_cells)
+      .def_property_readonly("sims", &gi::BatchSearcher::sims)
+      .def_property_readonly("done", &gi::BatchSearcher::done)
+
+      .def(
+          "set_positions",
+          [](gi::BatchSearcher& self, Array<int32_t> moves,
+             Array<int32_t> counts, int count) {
+            const int32_t* pm = moves.data();
+            const int32_t* pc = counts.data();
+            py::gil_scoped_release release;
+            self.set_positions(pm, pc, count);
+          },
+          py::arg("moves"), py::arg("counts"), py::arg("count"),
+          "按完整着法序列载入一批局面")
+
+      .def(
+          "collect",
+          [](gi::BatchSearcher& self, Array<uint8_t> boards,
+             Array<uint8_t> to_move, Array<int32_t> history,
+             Array<int32_t> move_number, Array<uint8_t> active) {
+            uint8_t* pb = boards.mutable_data();
+            uint8_t* pt = to_move.mutable_data();
+            int32_t* ph = history.mutable_data();
+            int32_t* pm = move_number.mutable_data();
+            uint8_t* pa = active.mutable_data();
+            py::gil_scoped_release release;
+            self.collect(pb, pt, ph, pm, pa);
+          },
+          py::arg("boards"), py::arg("to_move"), py::arg("history"),
+          py::arg("move_number"), py::arg("active"))
+
+      .def(
+          "apply",
+          [](gi::BatchSearcher& self, Array<float> policy, Array<float> value) {
+            const float* pp = policy.data();
+            const float* pv = value.data();
+            py::gil_scoped_release release;
+            self.apply(pp, pv);
+          },
+          py::arg("policy"), py::arg("value"))
+
+      .def(
+          "best_moves",
+          [](const gi::BatchSearcher& self) {
+            Array<int32_t> out({self.capacity()});
+            int32_t* p = out.mutable_data();
+            {
+              py::gil_scoped_release release;
+              self.best_moves(p);
+            }
+            return out;
+          },
+          "各槽位按根节点访问数取的最佳着法；非活跃槽位为 -1");
 }

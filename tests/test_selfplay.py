@@ -255,3 +255,120 @@ def test_no_raw_policy_games_by_default():
     for _ in range(200):
         actor.step()
     assert actor.stats["raw_policy_games"] == 0
+
+
+# ── 对任意局面的批量搜索 ────────────────────────────────────────────────────
+
+
+def _searcher_and_eval(sims=200, slots=8, size=SIZE):
+    from gomoku_instinct.core import load_core
+
+    core = load_core()
+    searcher = core.BatchSearcher(
+        board_size=size, sims=sims, num_slots=slots, num_threads=2
+    )
+    return searcher, UniformEvaluator(size)
+
+
+def _run_search(searcher, evaluator, games_moves, size=SIZE):
+    """把若干着法序列交给搜索器跑完，返回各自的最佳着法。"""
+    n = size * size
+    cap = searcher.capacity
+    counts = np.zeros(cap, dtype=np.int32)
+    for i, mv in enumerate(games_moves):
+        counts[i] = len(mv)
+    flat = np.array([m for mv in games_moves for m in mv], dtype=np.int32)
+    if flat.size == 0:
+        flat = np.zeros(1, dtype=np.int32)
+    searcher.set_positions(flat, counts, len(games_moves))
+
+    boards = np.zeros((cap, n), dtype=np.uint8)
+    to_move = np.zeros(cap, dtype=np.uint8)
+    history = np.zeros((cap, 4), dtype=np.int32)
+    move_number = np.zeros(cap, dtype=np.int32)
+    active = np.zeros(cap, dtype=np.uint8)
+
+    while not searcher.done:
+        searcher.collect(boards, to_move, history, move_number, active)
+        policy, value = evaluator(boards, to_move, history, move_number)
+        searcher.apply(
+            np.ascontiguousarray(policy, np.float32),
+            np.ascontiguousarray(value, np.float32),
+        )
+    return [int(m) for m in searcher.best_moves()[: len(games_moves)]]
+
+
+def test_search_finds_the_immediate_win():
+    """一步可胜的局面，搜索必须找到那一手。
+
+    这是搜索有没有真正工作的直接检验：先验是均匀的、价值恒为 0，网络什么都不懂，
+    棋力只能来自搜索本身 —— 搜到成五的子节点会立刻拿到 +1，PUCT 会把访问数全压过去。
+    """
+    searcher, evaluator = _searcher_and_eval(sims=300, slots=4)
+
+    # 黑 (4,1)(4,2)(4,3)(4,4)，白在别处；黑落 (4,0) 或 (4,5) 即成五
+    def cell(r, c):
+        return r * SIZE + c
+
+    moves = [
+        cell(4, 1), cell(0, 0),
+        cell(4, 2), cell(0, 1),
+        cell(4, 3), cell(0, 2),
+        cell(4, 4), cell(8, 8),
+    ]
+    best = _run_search(searcher, evaluator, [moves])[0]
+    assert best in (cell(4, 0), cell(4, 5)), (
+        f"搜索没找到成五点，选了 {divmod(best, SIZE)}"
+    )
+
+
+@pytest.mark.slow
+def test_search_blocks_the_opponent_win():
+    """对手一步可胜时必须去挡 —— 这比"找自己的杀"贵得多。
+
+    找自己的成五点只要一层：子节点直接是终局，一次访问就拿到 +1。
+    而"不挡就输"要两层：先走 X，再看到对手的成五应手。更麻烦的是 MCTS 的价值是
+    **平均**的：某个根子节点被访问 80 次、其中只有 1 次探到败着时，Q 才被拉低 0.01，
+    访问数几乎不会转移走。
+
+    均匀先验下实测：300 与 6000 次模拟都挡不住，50000 次才稳定挡住。
+    这个数字本身就是策略先验价值的量化——先验能把搜索预算集中到少数候选上，
+    同样的算力才够看深。也正因如此，本项目"把搜索压进权重"的路线才有意义：
+    一个好的策略网络等价于给搜索省下一到两个数量级的预算。
+    """
+    searcher, evaluator = _searcher_and_eval(sims=50000, slots=1)
+
+    def cell(r, c):
+        return r * SIZE + c
+
+    # 白 (4,1)-(4,4) 成四，左端已被黑 (4,0) 堵死，只剩 (4,5) 一个成五点。
+    # 必须是冲四而非活四：活四两端都能成五，黑方堵哪边都输，
+    # 那种局面下搜索判定"怎么走都一样输"是完全正确的，测不出防守能力。
+    moves = [
+        cell(4, 0), cell(4, 1),
+        cell(0, 0), cell(4, 2),
+        cell(0, 1), cell(4, 3),
+        cell(8, 8), cell(4, 4),
+    ]
+    best = _run_search(searcher, evaluator, [moves])[0]
+    assert best == cell(4, 5), (
+        f"搜索没去挡对手唯一的成五点，选了 {divmod(best, SIZE)}"
+    )
+
+
+def test_search_returns_legal_moves_and_marks_inactive_slots():
+    searcher, evaluator = _searcher_and_eval(sims=64, slots=8)
+    rng = np.random.default_rng(5)
+    games_moves = []
+    for _ in range(3):
+        k = int(rng.integers(4, 20))
+        cells = rng.choice(SIZE * SIZE, size=k, replace=False)
+        games_moves.append([int(c) for c in cells])
+
+    all_best = [int(m) for m in _searcher_best(searcher, evaluator, games_moves)]
+    for mv, best in zip(games_moves, all_best):
+        assert best >= 0 and best not in mv, "搜索给出了已占点"
+
+
+def _searcher_best(searcher, evaluator, games_moves):
+    return _run_search(searcher, evaluator, games_moves)

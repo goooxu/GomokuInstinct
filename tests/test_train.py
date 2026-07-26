@@ -667,3 +667,39 @@ def test_blunder_mining_off_by_default(rules):
     assert buf.blunder_fraction == 0.0
     batch = buf.sample(64, "cpu", np.random.default_rng(2)) if len(buf) else None
     assert batch is None or len(batch) == 64
+
+
+def test_old_shards_without_new_fields_still_load(rules, tmp_path):
+    """字段是会新增的；旧分片必须还能读，缺的补零。
+
+    这条曾经出过事：给分片加了 blunder_gap 字段后，restore_from_shards 按字段硬取，
+    旧分片抛 KeyError 又被 except 吞掉，于是磁盘上积累的全部样本**静默作废**——
+    续训后 buffer=0，不报任何错。
+    """
+    shard_dir = tmp_path / "replay"
+    shard_dir.mkdir()
+
+    # 造一个"旧版"分片：故意不含 blunder_gap
+    chunk = _fake_drain(120, seed=80)
+    from gomoku_instinct.train.replay import compute_labels
+
+    labels = compute_labels(chunk["boards"], chunk["to_move"], SIZE, rules, 2)
+    payload = {
+        "boards": chunk["boards"],
+        "policy": chunk["policy"].astype(np.float16),
+        "to_move": chunk["to_move"],
+        "history": chunk["history"],
+        "move_number": chunk["move_number"],
+        "value": chunk["value"],
+        "plies_remaining": chunk["plies_remaining"],
+        "next_move": chunk["next_move"],
+        "root_value": chunk["root_value"],
+        **labels,
+    }
+    np.savez(str(shard_dir / "actor0_00000000.npz"), **payload)
+
+    buf = ReplayBuffer(2000, SIZE, shard_dir=str(shard_dir))
+    assert buf.restore_from_shards() == 120, "旧分片被整片丢弃了"
+    assert len(buf) == 120
+    batch = buf.sample(16, "cpu", np.random.default_rng(0))
+    assert torch.all(batch.blunder_gap == 0.0)

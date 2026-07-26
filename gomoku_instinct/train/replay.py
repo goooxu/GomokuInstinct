@@ -43,6 +43,9 @@ _FIELDS = {
 
 HISTORY = 4
 
+_FIELDS_ORDER = list(_FIELDS)
+_PER_CELL_FIELDS = {"boards", "policy", "threat_self", "threat_opp", "forbidden"}
+
 
 @dataclass
 class Batch:
@@ -117,6 +120,31 @@ def compute_labels(
         "threat_opp": threat_opp,
         "forbidden": forbidden,
     }
+
+
+
+def _read_shard(path: str, n: int) -> dict[str, np.ndarray] | None:
+    """读一个分片，缺失字段补零。
+
+    字段是会新增的（例如后来加的 blunder_gap）。若按 _FIELDS 逐字段硬取，
+    旧分片会抛 KeyError；再被 except 吞掉的话，磁盘上积累的全部样本会**静默作废**，
+    表现为续训后 buffer=0 而不报任何错。所以这里对缺失字段补零，
+    真正读不出来才返回 None，并由调用方出声。
+    """
+    try:
+        with np.load(path) as data:
+            keys = set(data.files)
+            count = data[_FIELDS_ORDER[0]].shape[0]
+            chunk = {}
+            for key, dtype in _FIELDS.items():
+                if key in keys:
+                    chunk[key] = data[key]
+                else:
+                    shape = (count, n) if key in _PER_CELL_FIELDS else (count,)
+                    chunk[key] = np.zeros(shape, dtype=dtype)
+            return chunk
+    except (OSError, ValueError, KeyError, EOFError):
+        return None
 
 
 class ReplayBuffer:
@@ -402,10 +430,8 @@ class ReplayBuffer:
         loaded = 0
         for name in candidates:
             path = os.path.join(self.shard_dir, name)
-            try:
-                with np.load(path) as data:
-                    chunk = {key: data[key] for key in _FIELDS}
-            except (OSError, ValueError, KeyError):
+            chunk = _read_shard(path, self.n)
+            if chunk is None:
                 continue  # 还没写完或已被回收，下轮再看
             self._seen_shards.add(name)
             # 入库但不再重复落盘 —— 分片已经在磁盘上了
@@ -436,14 +462,14 @@ class ReplayBuffer:
         produced = self.total_added
 
         loaded = 0
+        skipped = 0
         for name in reversed(shards):
             if loaded >= self.capacity:
                 break
-            try:
-                with np.load(os.path.join(self.shard_dir, name)) as data:
-                    chunk = {key: data[key] for key in _FIELDS}
-            except (OSError, ValueError, KeyError):
-                continue  # 半截或损坏的分片直接跳过
+            chunk = _read_shard(os.path.join(self.shard_dir, name), self.n)
+            if chunk is None:
+                skipped += 1
+                continue
             # 直接写入环形缓冲，但不再重复落盘
             shard_dir, self.shard_dir = self.shard_dir, None
             self.add(chunk)
@@ -453,6 +479,8 @@ class ReplayBuffer:
         # 已经装回来的分片不该再被 ingest_new_shards 重复吃一遍
         self._seen_shards.update(shards)
         self.total_added = produced
+        if skipped:
+            print(f"[replay] 有 {skipped}/{len(shards)} 个分片读不出来，已跳过", flush=True)
         return min(loaded, self.capacity)
 
     def state_dict(self) -> dict:

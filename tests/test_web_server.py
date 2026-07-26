@@ -382,6 +382,29 @@ def test_api_error_recovery_does_not_reenter_guard():
         assert call not in body, f"api() 里不该调用 {call}"
 
 
+def test_page_javascript_parses():
+    """页面里的 JS 必须能解析通过。
+
+    语法错误的后果是整页白屏，而服务端一切正常、没有任何报错 —— 只能靠打开浏览器
+    才发现。容器里没有 JS 运行时，用纯 Python 的 esprima 只做语法检查；
+    它解析到 ES2017，用了更新的语法（比如可选链 ?.）会在这里报错而不是在浏览器里。
+    """
+    import re
+
+    esprima = pytest.importorskip("esprima", reason="未安装 esprima，跳过 JS 语法检查")
+    script = re.search(r"<script>(.*?)</script>", _page(), re.S)
+    assert script, "页面里找不到 <script> 块"
+    esprima.parseScript(script.group(1))
+
+
+def test_analysis_marks_are_shown_by_default():
+    """模型的候选点必须默认画在棋盘上，而不是藏在开关后面。"""
+    body = _strip_comments(_function_body(_page(), "function analysisMarks()"))
+    assert "showCand" in body and "slice(0, n)" in body
+    draw = _strip_comments(_function_body(_page(), "function draw()"))
+    assert "analysisMarks()" in draw
+
+
 def test_color_select_offers_both_sides():
     page = _page()
     assert 'value="black"' in page and 'value="white"' in page

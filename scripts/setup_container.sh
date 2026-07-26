@@ -10,14 +10,15 @@ set -euo pipefail
 echo "== 安装开发依赖到 user site =="
 python -m pip install --user --no-warn-script-location \
     pytest \
-    pyyaml
+    pyyaml \
+    esprima
 
 echo
 echo "== 版本确认 =="
 python - <<'PY'
 import importlib
 
-for name in ("numpy", "yaml", "pytest", "torch"):
+for name in ("numpy", "yaml", "pytest", "torch", "esprima"):
     try:
         mod = importlib.import_module(name)
         print(f"  {name:8s} {getattr(mod, '__version__', '?')}")

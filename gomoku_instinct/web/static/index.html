@@ -99,7 +99,7 @@
     </div>
     <div class="row">
       <label class="chk"><input type="checkbox" id="showNum"> 手数</label>
-      <label class="chk"><input type="checkbox" id="showCand"> AI 候选</label>
+      <label class="chk"><input type="checkbox" id="showCand"> 更多候选</label>
     </div>
 
     <div class="sec" id="evalSec" style="display:none">
@@ -116,8 +116,10 @@
     </div>
 
     <div class="tip">
-      鼠标悬停会在落点上显示半透明的棋子和十字准星，确认后再点。<br>
-      方向键也能移动落点，回车落子。
+      鼠标悬停会在落点上显示半透明的棋子、四边坐标同步高亮，确认后再点。<br>
+      方向键也能移动落点，回车落子。<br>
+      棋盘上的蓝圈是模型的候选点与概率：AI 落子后显示的是<b>除落子点外</b>
+      概率最高的两个。
     </div>
   </div>
 </div>
@@ -214,6 +216,15 @@ const shownLast = () =>
   viewPly === null ? S.last_move
   : viewPly > 0 ? S.history[viewPly - 1].move : null;
 
+// 要在棋盘上标出来的候选点：取最近一次分析里仍是空点的前几个。
+// 默认两个，"更多候选"打开后给到五个。
+function analysisMarks() {
+  if (!S.analysis || viewPly !== null) return [];
+  const grid = shownGrid();
+  const n = $("showCand").checked ? 5 : 2;
+  return S.analysis.top.filter((cd) => grid[cd.move] === 0).slice(0, n);
+}
+
 function drawStone(c, r, color, alpha) {
   const x = cx(c), y = cy(r), rad = cell * 0.455;
   ctx.save();
@@ -252,14 +263,6 @@ function draw() {
   bg.addColorStop(1, "#d9ad6b");
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, px, px);
-
-  // 悬停的十字准星，画在格线之下，避免盖住棋子
-  if (hover !== null && !readonly) {
-    const hc = hover % N, hr = (hover - hc) / N;
-    ctx.fillStyle = "rgba(255,255,255,.34)";
-    ctx.fillRect(cx(hc) - cell * 0.5, 0, cell, px);
-    ctx.fillRect(0, cy(hr) - cell * 0.5, px, cell);
-  }
 
   // 格线
   ctx.strokeStyle = "#6b4a22";
@@ -318,21 +321,28 @@ function draw() {
     ctx.lineCap = "butt";
   }
 
-  // AI 候选（仅当前局面）
-  if ($("showCand").checked && S.analysis && viewPly === null) {
+  // 模型最近一次判断里、当前还空着的最优点。
+  //
+  // AI 落子后 top[0] 就是它刚下的那手，已经有子了，被这里的空点过滤自然排除，
+  // 于是显示的正好是"除落子点之外概率最高的两个"。轮到人时按提示看，
+  // 显示的是模型自己会走的两个点。一条规则覆盖两种情况，不必分支。
+  for (const [rank, cd] of analysisMarks().entries()) {
+    const c = cd.move % N, r = (cd.move - c) / N;
+    const alpha = rank === 0 ? 0.85 : 0.55;
+    ctx.beginPath();
+    ctx.arc(cx(c), cy(r), cell * 0.42, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(58,110,190,${0.13 * (rank === 0 ? 1.4 : 1)})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(38,86,160,${alpha})`;
+    ctx.lineWidth = Math.max(1, cell * 0.045);
+    ctx.setLineDash(rank === 0 ? [] : [cell * 0.12, cell * 0.1]);
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = `${Math.round(cell * 0.3)}px system-ui, sans-serif`;
-    for (const cd of S.analysis.top) {
-      if (grid[cd.move] !== 0) continue;
-      const c = cd.move % N, r = (cd.move - c) / N;
-      ctx.fillStyle = `rgba(40,90,180,${0.15 + 0.5 * cd.prob})`;
-      ctx.beginPath();
-      ctx.arc(cx(c), cy(r), cell * 0.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.fillText(Math.round(cd.prob * 100) + "", cx(c), cy(r));
-    }
+    ctx.font = `600 ${Math.round(cell * 0.3)}px system-ui, sans-serif`;
+    ctx.fillStyle = `rgba(24,64,124,${alpha})`;
+    ctx.fillText(Math.round(cd.prob * 100) + "%", cx(c), cy(r));
   }
 
   // 棋子

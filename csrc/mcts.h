@@ -51,6 +51,8 @@ class MctsTree {
 
   // 根节点各着法的访问数，写入长度 num_cells 的数组。
   void root_visit_counts(int32_t* out) const;
+  // 根节点各着法的 Q（父节点视角）。未访问过的着法写 -1，按最坏情况算。
+  void root_child_values(float* out) const;
   // 给根节点先验混入 Dirichlet 噪声。
   void add_root_noise(const float* noise, float eps);
   bool root_expanded() const { return node_expanded_[root_] != 0; }

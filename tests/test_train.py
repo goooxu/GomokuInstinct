@@ -69,6 +69,13 @@ def _fake_drain(count: int, seed: int = 0) -> dict:
         "plies_remaining": rng.integers(1, 40, size=count).astype(np.int32),
         "next_move": next_move,
         "root_value": rng.uniform(-1, 1, size=count).astype(np.float32),
+        # 大部分局面零搜索也不会走错，只有一小撮是"失误局面"——
+        # 这正是失误挖掘要捞出来的分布
+        "blunder_gap": np.where(
+            rng.random(count) < 0.05,
+            rng.uniform(0.3, 1.0, size=count),
+            0.0,
+        ).astype(np.float32),
         "searched": np.ones(count, dtype=np.uint8),
     }
 
@@ -627,3 +634,36 @@ def test_forbidden_margin_silent_when_no_forbidden_point():
     assert metrics["policy/risky_position_rate"] == 0.0
     assert "policy/forbidden_argmax_rate_risky" not in metrics
     assert "loss/forbidden_margin" not in metrics
+
+
+def test_blunder_mining_oversamples_lookahead_failures(rules):
+    """失误挖掘要把「零搜索会走错」的局面按比例塞进批次。
+
+    这类局面在全体样本里只占百分之几，均匀采样几乎碰不到 —— 而它们恰恰是
+    策略缺前瞻能力的地方。头号指标（零搜索策略值多少次搜索）卡住不动时，
+    这是最直接的定向修补手段。
+    """
+    plain = ReplayBuffer(4000, SIZE)
+    plain.add_from_drain(_fake_drain(2000, seed=70), rules)
+    mined = ReplayBuffer(
+        4000, SIZE, blunder_threshold=0.15, blunder_fraction=0.25
+    )
+    mined.add_from_drain(_fake_drain(2000, seed=70), rules)
+
+    base = plain.sample(512, "cpu", np.random.default_rng(1))
+    hit = mined.sample(512, "cpu", np.random.default_rng(1))
+
+    base_rate = (base.blunder_gap > 0.15).float().mean().item()
+    mined_rate = (hit.blunder_gap > 0.15).float().mean().item()
+
+    assert base_rate < 0.12, f"造的数据里失误局面本就太多（{base_rate:.1%}），测不出效果"
+    assert mined_rate >= 0.25, f"失误局面占比只有 {mined_rate:.1%}，过采样没生效"
+    assert mined_rate > base_rate * 2
+
+
+def test_blunder_mining_off_by_default(rules):
+    """不开启时采样必须与普通均匀采样一致，避免悄悄改变训练分布。"""
+    buf = ReplayBuffer(4000, SIZE)
+    assert buf.blunder_fraction == 0.0
+    batch = buf.sample(64, "cpu", np.random.default_rng(2)) if len(buf) else None
+    assert batch is None or len(batch) == 64

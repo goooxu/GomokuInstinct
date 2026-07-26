@@ -35,6 +35,7 @@ _FIELDS = {
     "plies_remaining": np.int32,
     "next_move": np.int32,
     "root_value": np.float32,
+    "blunder_gap": np.float32,
     "threat_self": np.uint8,
     "threat_opp": np.uint8,
     "forbidden": np.uint8,
@@ -59,6 +60,15 @@ class Batch:
     threat_opp: torch.Tensor  # (B, N) int64，对方的棋型等级
     forbidden: torch.Tensor  # (B, N) float32，黑方禁手点
     root_value: torch.Tensor  # (B,) float32，搜索给出的根节点评估
+    # (B,) float32，零搜索选点与搜索最优手的价值差。给默认值是为了让
+    # 手工构造 Batch 的调用方（测试、旧 checkpoint 的数据）不必都改一遍。
+    blunder_gap: torch.Tensor | None = None
+
+    def __post_init__(self) -> None:
+        if self.blunder_gap is None:
+            self.blunder_gap = torch.zeros(
+                self.boards.shape[0], device=self.boards.device
+            )
 
     def __len__(self) -> int:
         return self.boards.shape[0]
@@ -120,6 +130,8 @@ class ReplayBuffer:
         keep_shards: int = 400,
         label_workers: int = 8,
         shard_prefix: str = "shard",
+        blunder_threshold: float = 0.0,
+        blunder_fraction: float = 0.0,
     ) -> None:
         self.capacity = capacity
         self.board_size = board_size
@@ -131,6 +143,10 @@ class ReplayBuffer:
         # 多个 actor 进程共写一个目录时，各自用不同前缀避免撞名
         self.shard_prefix = shard_prefix
         self._seen_shards: set[str] = set()
+        # 失误挖掘：把「零搜索会走错、且错得厉害」的局面按比例塞进每个批次。
+        # 这类局面正是策略缺前瞻的地方，均匀采样会把它们淹没在海量平凡局面里。
+        self.blunder_threshold = blunder_threshold
+        self.blunder_fraction = blunder_fraction
 
         self.size = 0
         self.cursor = 0
@@ -150,6 +166,7 @@ class ReplayBuffer:
             "plies_remaining": np.zeros(capacity, np.int32),
             "next_move": np.zeros(capacity, np.int32),
             "root_value": np.zeros(capacity, np.float32),
+            "blunder_gap": np.zeros(capacity, np.float32),
             "threat_self": np.zeros((capacity, n), np.uint8),
             "threat_opp": np.zeros((capacity, n), np.uint8),
             "forbidden": np.zeros((capacity, n), np.uint8),
@@ -184,6 +201,11 @@ class ReplayBuffer:
             "plies_remaining": np.ascontiguousarray(drained["plies_remaining"][:count]),
             "next_move": np.ascontiguousarray(drained["next_move"][:count]),
             "root_value": np.ascontiguousarray(drained["root_value"][:count]),
+            "blunder_gap": np.ascontiguousarray(
+                drained.get(
+                    "blunder_gap", np.zeros(count, np.float32)
+                )[:count]
+            ),
         }
         chunk.update(
             compute_labels(
@@ -231,7 +253,18 @@ class ReplayBuffer:
     ) -> Batch:
         if self.size == 0:
             raise RuntimeError("replay buffer 为空")
+
         idx = rng.integers(0, self.size, size=batch_size)
+        # 失误挖掘：定向过采样「零搜索会走错」的局面。
+        # 这类局面在全体样本里占比很小，均匀采样几乎碰不到，
+        # 而它们恰恰是策略缺前瞻能力的地方。
+        n_blunder = int(batch_size * self.blunder_fraction)
+        if n_blunder > 0 and self.blunder_threshold > 0:
+            gaps = self._data["blunder_gap"][: self.size]
+            pool = np.flatnonzero(gaps > self.blunder_threshold)
+            if pool.size:
+                picked = rng.choice(pool, size=min(n_blunder, batch_size))
+                idx[: picked.size] = picked
 
         boards = self._data["boards"][idx]
         policy = self._data["policy"][idx].astype(np.float32)
@@ -283,6 +316,7 @@ class ReplayBuffer:
             threat_opp=to(threat_opp, torch.int64),
             forbidden=to(forbidden, torch.float32),
             root_value=to(self._data["root_value"][idx], torch.float32),
+            blunder_gap=to(self._data["blunder_gap"][idx], torch.float32),
         )
 
     # ── 落盘与恢复 ──────────────────────────────────────────────────────────

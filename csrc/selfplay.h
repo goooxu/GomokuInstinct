@@ -97,7 +97,8 @@ class SelfPlayRunner {
   // 取出样本并清空队列，返回实际取出的条数。
   int drain(int max_samples, uint8_t* boards, uint8_t* to_move, int32_t* history,
             int32_t* move_number, float* policy, float* value, int32_t* plies,
-            int32_t* next_move, float* root_value, uint8_t* searched);
+            int32_t* next_move, float* root_value, float* blunder_gap,
+            uint8_t* searched);
 
   Stats stats() const;
   void reset_stats();
@@ -116,6 +117,9 @@ class SelfPlayRunner {
     int32_t move_number = 0;
     int32_t ply = 0;
     float root_value = 0.0f;
+    // 失误挖掘信号：搜索认定的最优手，与零搜索策略会选的那手，价值差多少。
+    // 差得越大，说明这个局面上「没有搜索就会走错」越严重。
+    float blunder_gap = 0.0f;
     float value = 0.0f;
     int32_t plies_remaining = 0;
     int32_t next_move = -1;
@@ -131,6 +135,7 @@ class SelfPlayRunner {
     std::vector<Sample> pending;   // 本局已记录、等待填入对局结果的样本
     std::vector<Sample> finished;  // 已完成对局的样本，等待 drain
     std::vector<int32_t> visit_counts;
+    std::vector<float> child_values;
     std::vector<float> root_policy;  // 加噪前的网络先验，供零搜索落子使用
     std::vector<float> noise;
     Stats stats;

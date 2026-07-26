@@ -274,6 +274,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             Array<int32_t> plies({count});
             Array<int32_t> next_move({count});
             Array<float> root_value({count});
+            Array<float> blunder_gap({count});
             Array<uint8_t> searched({count});
 
             int written = 0;
@@ -287,9 +288,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
               int32_t* pl = plies.mutable_data();
               int32_t* pnm = next_move.mutable_data();
               float* prv = root_value.mutable_data();
+              float* pbg = blunder_gap.mutable_data();
               uint8_t* ps = searched.mutable_data();
               py::gil_scoped_release release;
-              written = self.drain(count, pb, pt, ph, pm, pp, pv, pl, pnm, prv, ps);
+              written = self.drain(count, pb, pt, ph, pm, pp, pv, pl, pnm, prv,
+                                   pbg, ps);
             }
 
             py::dict out;
@@ -303,6 +306,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             out["plies_remaining"] = plies;
             out["next_move"] = next_move;
             out["root_value"] = root_value;
+            out["blunder_gap"] = blunder_gap;
             out["searched"] = searched;
             return out;
           },

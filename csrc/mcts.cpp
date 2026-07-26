@@ -203,6 +203,19 @@ void MctsTree::root_visit_counts(int32_t* out) const {
   }
 }
 
+void MctsTree::root_child_values(float* out) const {
+  std::fill(out, out + num_cells_, -1.0f);
+  const int start = node_child_start_[root_];
+  const int count = node_child_count_[root_];
+  for (int i = 0; i < count; ++i) {
+    const int slot = start + i;
+    if (child_visits_[slot] > 0) {
+      out[child_move_[slot]] =
+          child_value_sum_[slot] / static_cast<float>(child_visits_[slot]);
+    }
+  }
+}
+
 void MctsTree::add_root_noise(const float* noise, float eps) {
   const int start = node_child_start_[root_];
   const int count = node_child_count_[root_];

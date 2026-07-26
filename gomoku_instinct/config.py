@@ -72,6 +72,16 @@ def trainer_config_from(cfg: dict, **overrides):
         min_positions_to_start=replay.get("min_positions_to_start", 50_000),
         shard_size=replay.get("shard_positions", 65_536),
         keep_shards=replay.get("disk_keep_shards", 400),
+        blunder_threshold=(
+            replay.get("blunder_mining", {}).get("value_gap_threshold", 0.15)
+            if replay.get("blunder_mining", {}).get("enabled", False)
+            else 0.0
+        ),
+        blunder_fraction=(
+            replay.get("blunder_mining", {}).get("max_fraction_of_batch", 0.2)
+            if replay.get("blunder_mining", {}).get("enabled", False)
+            else 0.0
+        ),
         batch_size=train.get("batch_size", 1024),
         max_steps=train.get("max_steps", 2_000_000),
         compile=train.get("compile", True),

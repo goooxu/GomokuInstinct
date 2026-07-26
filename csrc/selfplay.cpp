@@ -38,6 +38,7 @@ SelfPlayRunner::SelfPlayRunner(const SelfPlayConfig& cfg) : cfg_(cfg) {
     // 每局独立的随机源：换机续训时可以精确恢复。
     slot.rng.seed(cfg.seed + 0x9E3779B97F4A7C15ULL * (static_cast<uint64_t>(i) + 1));
     slot.visit_counts.resize(n);
+    slot.child_values.resize(n);
     slot.root_policy.resize(n);
     slot.noise.resize(n);
     start_game(slot);
@@ -219,6 +220,32 @@ void SelfPlayRunner::finish_move(Slot& slot) {
   }
 
   // 只有完整搜索的手才产出训练目标。
+  // 失误挖掘信号：搜索认定的最优手 vs 零搜索策略会选的那手，价值差多少。
+  // 两者的 Q 都在树里现成，算它几乎不花钱。
+  float blunder_gap = 0.0f;
+  if (slot.full_search) {
+    slot.tree->root_child_values(slot.child_values.data());
+
+    int mcts_move = -1, best_visits = -1;
+    int raw_move = -1;
+    float best_prior = -1.0f;
+    for (int m = 0; m < n; ++m) {
+      if (slot.visit_counts[m] > best_visits) {
+        best_visits = slot.visit_counts[m];
+        mcts_move = m;
+      }
+      if (slot.pos->is_legal(m) && slot.root_policy[m] > best_prior) {
+        best_prior = slot.root_policy[m];
+        raw_move = m;
+      }
+    }
+    if (mcts_move >= 0 && raw_move >= 0 && mcts_move != raw_move) {
+      // 未被搜索访问过的着法按 -1 计：没被访问恰恰说明搜索认为它不值得看
+      blunder_gap = slot.child_values[mcts_move] - slot.child_values[raw_move];
+      if (blunder_gap < 0.0f) blunder_gap = 0.0f;
+    }
+  }
+
   if (slot.full_search) {
     int total_visits = 0;
     for (int m = 0; m < n; ++m) total_visits += slot.visit_counts[m];
@@ -236,6 +263,7 @@ void SelfPlayRunner::finish_move(Slot& slot) {
       sample.move_number = slot.pos->ply();
       sample.ply = slot.pos->ply();
       sample.root_value = root_value;
+      sample.blunder_gap = blunder_gap;
       sample.searched = 1;
       slot.pending.push_back(std::move(sample));
     }
@@ -305,7 +333,8 @@ int SelfPlayRunner::pending_samples() const {
 int SelfPlayRunner::drain(int max_samples, uint8_t* boards, uint8_t* to_move,
                           int32_t* history, int32_t* move_number, float* policy,
                           float* value, int32_t* plies, int32_t* next_move,
-                          float* root_value, uint8_t* searched) {
+                          float* root_value, float* blunder_gap,
+                          uint8_t* searched) {
   const int n = num_cells();
   int written = 0;
 
@@ -324,6 +353,7 @@ int SelfPlayRunner::drain(int max_samples, uint8_t* boards, uint8_t* to_move,
       plies[written] = sample.plies_remaining;
       next_move[written] = sample.next_move;
       root_value[written] = sample.root_value;
+      blunder_gap[written] = sample.blunder_gap;
       searched[written] = sample.searched;
       ++written;
       ++taken;

@@ -60,6 +60,9 @@ class TrainerConfig:
     shard_size: int = 65_536
     keep_shards: int = 400
     label_workers: int = 16
+    # 失误挖掘：把「零搜索会走错且错得厉害」的局面按比例塞进每个批次
+    blunder_threshold: float = 0.0
+    blunder_fraction: float = 0.0
 
     # 训练
     batch_size: int = 1024
@@ -150,6 +153,8 @@ class Trainer:
             shard_size=cfg.shard_size,
             keep_shards=cfg.keep_shards,
             label_workers=cfg.label_workers,
+            blunder_threshold=cfg.blunder_threshold,
+            blunder_fraction=cfg.blunder_fraction,
         )
 
         self.actor = None if cfg.external_selfplay else SelfPlayActor(
@@ -209,6 +214,11 @@ class Trainer:
         self.samples_seen += self.cfg.batch_size
         metrics["train/lr"] = lr
         metrics["train/grad_norm"] = float(grad_norm)
+        # 批次里失误局面的占比与强度：失误挖掘是否真的在起作用，看这两个数
+        metrics["blunder/batch_mean_gap"] = float(batch.blunder_gap.mean())
+        metrics["blunder/batch_hit_rate"] = float(
+            (batch.blunder_gap > self.cfg.blunder_threshold).float().mean()
+        )
         return metrics
 
     def selfplay_cycle(self) -> int:

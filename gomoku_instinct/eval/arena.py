@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass, field
 
 from ..rules import BLACK, WHITE, ForbiddenSemantics, Game, Outcome, RenjuRules
@@ -67,15 +68,23 @@ def play_match(
     rules: RenjuRules | None = None,
     max_plies: int | None = None,
     batch: int = 64,
+    random_opening_plies: int = 2,
+    seed: int = 0,
 ) -> MatchResult:
     """让两个 player 对弈若干局。先后手逐局轮换。
 
     player 需要实现 choose_batch(list[Game]) -> list[int]。同一批里所有对局都
     轮到同一方走，因此模型侧可以一次前向吃掉整批。
+
+    **每局开头先随机落若干子**（random_opening_plies）。两个确定性 player
+    对弈时，若不这么做，每一局都是同一盘棋的重放，胜负完全由先后手决定，
+    得分率会恒等于 50% —— 那是测量退化，不是势均力敌。零搜索策略与低模拟数
+    MCTS 对打时尤其明显，因为后者基本就是跟着策略先验走。
     """
     rules = rules or RenjuRules()
     max_plies = max_plies or board_size * board_size
     result = MatchResult()
+    rng = random.Random(seed)
 
     remaining = games
     game_index = 0
@@ -87,7 +96,13 @@ def play_match(
         a_is_black = [(game_index + i) % 2 == 0 for i in range(count)]
         game_index += count
         boards = [Game(board_size, rules, ForbiddenSemantics.LOSE) for _ in range(count)]
-        active = list(range(count))
+        for game in boards:
+            for _ in range(random_opening_plies):
+                legal = game.legal_moves()
+                if not legal or game.is_terminal():
+                    break
+                game.play(rng.choice(legal))
+        active = [i for i in range(count) if not boards[i].is_terminal()]
 
         while active:
             # 按「该谁走」分组，各自一次批量决策

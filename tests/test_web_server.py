@@ -10,6 +10,7 @@ import functools
 import http.client
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -29,9 +30,11 @@ class _StubPlayer:
     def __init__(self, replies=None) -> None:
         self.replies = list(replies) if replies else None
         self.calls = 0
+        self.threads: set[int] = set()
 
     def analyze(self, game, top_k: int = 5) -> MoveAnalysis:
         self.calls += 1
+        self.threads.add(threading.get_ident())
         if self.replies:
             move = self.replies.pop(0)
         else:
@@ -258,3 +261,59 @@ def test_session_cap_evicts_oldest(server):
     for _ in range(MAX_SESSIONS + 3):
         post(base, "/api/new", {"color": "black"})
     assert len(app.sessions) <= MAX_SESSIONS
+
+
+# ── 推理线程 ────────────────────────────────────────────────────────────────
+def test_inference_stays_on_one_dedicated_thread(server):
+    """推理必须固定在一条长期存活的线程上跑。
+
+    ThreadingHTTPServer 每个连接开一条新线程，而 cuBLAS/cuDNN 句柄是按线程建的：
+    在新线程上做第一次推理要重建句柄。实测同一次前向，主线程 11ms、每请求新线程
+    800ms —— 七十多倍，却不报任何错，只表现为"点一下要等一秒"。
+    """
+    base, app = server
+    _, s = post(base, "/api/new", {"color": "black"})
+    for _ in range(6):
+        post(base, "/api/hint", {"sid": s["sid"]})
+    assert app.player.calls >= 6
+    assert len(app.player.threads) == 1
+
+
+def test_inference_thread_is_not_a_request_thread(server):
+    """而且那条线程不能是某个请求自己的线程 —— 请求线程用完就没了。"""
+    base, app = server
+    _, s = post(base, "/api/new", {"color": "black"})
+    post(base, "/api/hint", {"sid": s["sid"]})
+    infer_thread = next(iter(app.player.threads))
+    alive = {t.ident for t in threading.enumerate()}
+    assert infer_thread in alive
+    time.sleep(0.05)
+    post(base, "/api/hint", {"sid": s["sid"]})
+    assert app.player.threads == {infer_thread}  # 换了连接还是同一条
+
+
+def test_warmup_primes_the_inference_thread(server):
+    base, app = server
+    app.warmup()
+    assert app.player.calls == 1 and len(app.player.threads) == 1
+
+
+def test_static_cache_picks_up_edits(tmp_path, server):
+    """静态文件缓存必须按 mtime 失效 —— 改了页面刷新不生效比慢更难查。"""
+    import os
+
+    from gomoku_instinct.web import server as srv
+
+    base, _ = server
+    path = os.path.join(srv.STATIC_DIR, "index.html")
+    original = open(path, "rb").read()
+    try:
+        assert raw_get(base, "/")[1] == original
+        with open(path, "wb") as fh:
+            fh.write(b"<canvas>changed</canvas>")
+        os.utime(path, (0, 0))          # 明确改 mtime，不依赖文件系统时间精度
+        assert raw_get(base, "/")[1] == b"<canvas>changed</canvas>"
+    finally:
+        with open(path, "wb") as fh:
+            fh.write(original)
+        srv._STATIC_CACHE.clear()

@@ -18,6 +18,7 @@ import os
 import secrets
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..cli.engine import InstinctPlayer
@@ -37,6 +38,9 @@ OUTCOME_NAMES = {
     Outcome.WHITE_WIN: "white_win",
     Outcome.DRAW: "draw",
 }
+
+# 静态文件缓存：path -> (mtime_ns, bytes)
+_STATIC_CACHE: dict[str, tuple[int, bytes]] = {}
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -62,7 +66,7 @@ class Session:
 
 
 class App:
-    """服务端的全部可变状态。模型推理与会话改动都在同一把锁下进行。"""
+    """服务端的全部可变状态。会话改动在锁下进行，推理另有一条专属线程。"""
 
     def __init__(self, player: InstinctPlayer, meta: dict, size: int) -> None:
         self.player = player
@@ -71,6 +75,20 @@ class App:
         self.rules = RenjuRules()
         self.lock = threading.Lock()
         self.sessions: OrderedDict[str, Session] = OrderedDict()
+        # 所有推理都赶到同一个长期存活的线程上跑。
+        #
+        # ThreadingHTTPServer 每个连接开一条新线程，而 cuBLAS/cuDNN 的句柄是**按线程**
+        # 建的：在新线程上做第一次推理要重建句柄。实测同一次前向，主线程 11ms，
+        # 每请求新线程 800ms —— 七十多倍，而且不报任何错，只是"点一下要等一秒"。
+        # 固定一条预热过的线程之后回到 11ms。
+        self._infer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gi-infer")
+
+    def analyze(self, game: Game):
+        return self._infer.submit(self.player.analyze, game).result()
+
+    def warmup(self) -> None:
+        """先在推理线程上跑一次空盘，把句柄建好，免得第一手卡一下。"""
+        self.analyze(Game(self.size, self.rules, ForbiddenSemantics.LOSE))
 
     def new_session(self, human: int) -> tuple[str, Session]:
         while len(self.sessions) >= MAX_SESSIONS:
@@ -91,7 +109,7 @@ class App:
         game = session.game
         if game.is_terminal() or session.resigned is not None:
             return
-        analysis = self.player.analyze(game)
+        analysis = self.analyze(game)
         session.analysis_color = game.to_move
         session.analysis = analysis
         game.play(analysis.move)
@@ -183,10 +201,17 @@ class Handler(BaseHTTPRequestHandler):
         if not path.startswith(STATIC_DIR + os.sep) or not os.path.isfile(path):
             self._json({"error": "not found"}, 404)
             return
-        with open(path, "rb") as fh:
-            body = fh.read()
+        # 工作目录在 NFS 上，每次请求都重读一遍文件要几十毫秒。缓存住，
+        # 但按 mtime 判断是否失效（stat 实测接近零耗时）—— 改完页面刷新即可生效，
+        # 不必重启服务，省得改样式时来回等模型重新载入。
+        mtime = os.stat(path).st_mtime_ns
+        cached = _STATIC_CACHE.get(path)
+        if cached is None or cached[0] != mtime:
+            with open(path, "rb") as fh:
+                cached = (mtime, fh.read())
+            _STATIC_CACHE[path] = cached
         ext = os.path.splitext(path)[1]
-        self._send(body, CONTENT_TYPES.get(ext, "application/octet-stream"))
+        self._send(cached[1], CONTENT_TYPES.get(ext, "application/octet-stream"))
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -303,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "这局已经结束了"}, 409)
             return
         session.analysis_color = game.to_move
-        session.analysis = self.app.player.analyze(game)
+        session.analysis = self.app.analyze(game)
         self._json(self.app.state(payload["sid"], session))
 
     def _api_resign(self, payload: dict) -> None:
@@ -337,6 +362,7 @@ def serve(
     temperature: float = 0.0,
 ) -> int:
     app = build_app(checkpoint, device, safe_mode, temperature)
+    app.warmup()
     httpd = ThreadingHTTPServer((host, port), functools.partial(Handler, app))
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "") else host
     print(f"权重 step {app.meta['step']:,}   棋盘 {app.size}x{app.size}   设备 {device}")

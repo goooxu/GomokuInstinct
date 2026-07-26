@@ -415,7 +415,7 @@ def test_page_javascript_parses():
 def test_analysis_marks_are_shown_by_default():
     """模型的候选点必须默认画在棋盘上，而不是藏在开关后面。"""
     body = _strip_comments(_function_body(_page(), "function analysisMarks()"))
-    assert "showCand" in body and "slice(0, n)" in body
+    assert "slice(0, 2)" in body, "候选点数量不再是固定两个"
     draw = _strip_comments(_function_body(_page(), "function draw()"))
     assert "analysisMarks()" in draw
 

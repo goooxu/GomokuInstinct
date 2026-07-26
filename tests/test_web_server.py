@@ -41,6 +41,7 @@ class _StubPlayer:
             move = max(i for i, v in enumerate(game.board.grid) if v == 0)
         return MoveAnalysis(
             move=move,
+            move_prob=0.9,
             value=0.25,
             top_moves=[(move, 0.9), ((move + 1) % (SIZE * SIZE), 0.1)],
             forbidden_pred=[],
@@ -225,6 +226,20 @@ def test_ai_analysis_is_labelled_with_its_own_side(server):
     assert s["analysis"]["value_color"] == WHITE
 
 
+def test_played_move_probability_is_reported(server):
+    """必须单独给出「实际落的那手」的概率。
+
+    从 top_moves 里反查也能凑合，但 --temperature > 0 时抽样到的那手未必落在
+    top-5 里，查不到就只能悄悄不显示 —— 又一个不报错的静默降级。
+    """
+    base, _ = server
+    _, s = post(base, "/api/new", {"color": "black"})
+    _, s = post(base, "/api/move", {"sid": s["sid"], "move": rowcol(7, 7)})
+    a = s["analysis"]
+    assert a["move_prob"] == pytest.approx(0.9)
+    assert s["grid"][a["move"]] != 0  # 这手确实已经落在盘上
+
+
 def test_resign_gives_the_win_to_the_opponent(server):
     base, _ = server
     _, s = post(base, "/api/new", {"color": "black"})
@@ -403,6 +418,22 @@ def test_analysis_marks_are_shown_by_default():
     assert "showCand" in body and "slice(0, n)" in body
     draw = _strip_comments(_function_body(_page(), "function draw()"))
     assert "analysisMarks()" in draw
+
+
+def test_played_probability_and_move_number_coexist():
+    """手数和已落子概率必须能同时显示，不是二选一。
+
+    两者都画在同一颗子的正中央的话，后画的会盖掉先画的 —— 看上去只是"手数没生效"。
+    """
+    draw = _strip_comments(_function_body(_page(), "function draw()"))
+    assert "played.move_prob" in draw
+    assert "shared" in draw, "手数没有为概率让位"
+
+
+def test_tiny_probabilities_do_not_render_as_zero():
+    """极小的概率要显示 <1%，不能四舍五入成 0% —— 0% 读起来像"不可能"，是假的。"""
+    page = _strip_comments(_page())
+    assert '"<1%"' in page
 
 
 def test_color_select_offers_both_sides():

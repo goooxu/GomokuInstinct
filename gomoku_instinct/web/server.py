@@ -129,6 +129,7 @@ class App:
         if session.analysis is not None:
             analysis = {
                 "move": session.analysis.move,
+                "move_prob": session.analysis.move_prob,
                 "value": session.analysis.value,
                 "value_color": session.analysis_color,
                 "top": [

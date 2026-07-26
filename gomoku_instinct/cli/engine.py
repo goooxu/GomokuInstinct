@@ -30,6 +30,9 @@ class MoveAnalysis:
     top_moves: list[tuple[int, float]]  # (落点, 概率)，按概率降序
     forbidden_pred: list[float]  # 模型对每个点是否为黑方禁手的预测概率
     masked_forbidden: bool  # 是否因 safe-mode 屏蔽掉了禁手点
+    # 实际选中那一手的概率。不从 top_moves 反查是因为 temperature > 0 时抽样到的
+    # 那手未必落在 top-5 里，查不到就只能悄悄不显示。
+    move_prob: float = 0.0
 
 
 class InstinctPlayer:
@@ -104,6 +107,7 @@ class InstinctPlayer:
 
         return MoveAnalysis(
             move=move,
+            move_prob=float(probs[move]),
             value=float(InstinctNet.value_scalar(out.value)[0]),
             top_moves=top_moves,
             forbidden_pred=forbidden_pred,

@@ -118,8 +118,8 @@
     <div class="tip">
       鼠标悬停会在落点上显示半透明的棋子、四边坐标同步高亮，确认后再点。<br>
       方向键也能移动落点，回车落子。<br>
-      棋盘上的蓝圈是模型的候选点与概率：AI 落子后显示的是<b>除落子点外</b>
-      概率最高的两个。
+      AI 落子后，那颗子上写着模型给这一手的概率，蓝圈是它同时在考虑的
+      另外两个点。
     </div>
   </div>
 </div>
@@ -218,6 +218,8 @@ const shownLast = () =>
 
 // 要在棋盘上标出来的候选点：取最近一次分析里仍是空点的前几个。
 // 默认两个，"更多候选"打开后给到五个。
+const pct = (p) => (p >= 0.005 ? Math.round(p * 100) + "%" : "<1%");
+
 function analysisMarks() {
   if (!S.analysis || viewPly !== null) return [];
   const grid = shownGrid();
@@ -342,7 +344,7 @@ function draw() {
     ctx.textBaseline = "middle";
     ctx.font = `600 ${Math.round(cell * 0.3)}px system-ui, sans-serif`;
     ctx.fillStyle = `rgba(24,64,124,${alpha})`;
-    ctx.fillText(Math.round(cd.prob * 100) + "%", cx(c), cy(r));
+    ctx.fillText(pct(cd.prob), cx(c), cy(r));
   }
 
   // 棋子
@@ -352,26 +354,42 @@ function draw() {
     drawStone(c, r, grid[i]);
   }
 
+  // 模型选中这一手时给它自己的概率，标在那颗子上。
+  // 按提示（analysis.move 还是空点）时不画 —— 那手还没下，它是候选不是落子。
+  const played =
+    S.analysis && viewPly === null && grid[S.analysis.move] !== 0 ? S.analysis : null;
+  const showNum = $("showNum").checked;
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
   // 手数
-  if ($("showNum").checked) {
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = `600 ${Math.round(cell * 0.34)}px system-ui, sans-serif`;
+  if (showNum) {
     const upto = viewPly === null ? S.history.length : viewPly;
     for (let i = 0; i < upto; i++) {
       const h = S.history[i], c = h.move % N, r = (h.move - c) / N;
+      // 这颗子上还要写概率，就把手数上移并缩小，两个都看得见，不是二选一
+      const shared = played !== null && h.move === played.move;
+      ctx.font = `600 ${Math.round(cell * (shared ? 0.26 : 0.34))}px system-ui, sans-serif`;
       ctx.fillStyle = h.color === S.colors.black ? "#e8e4dc" : "#2a2a2a";
-      ctx.fillText(String(i + 1), cx(c), cy(r));
+      ctx.fillText(String(i + 1), cx(c), cy(r) - (shared ? cell * 0.19 : 0));
     }
   }
 
-  // 最后一手
+  if (played !== null) {
+    const c = played.move % N, r = (played.move - c) / N;
+    ctx.font = `600 ${Math.round(cell * (showNum ? 0.26 : 0.3))}px system-ui, sans-serif`;
+    ctx.fillStyle = grid[played.move] === S.colors.black ? "#e8e4dc" : "#2a2a2a";
+    ctx.fillText(pct(played.move_prob), cx(c), cy(r) + (showNum ? cell * 0.19 : 0));
+  }
+
+  // 最后一手：圈画在靠近子边缘处，好给中间的手数/概率让出位置
   if (last !== null && last !== undefined && grid[last]) {
     const c = last % N, r = (last - c) / N;
     ctx.strokeStyle = "#d43b26";
-    ctx.lineWidth = Math.max(1.5, cell * 0.055);
+    ctx.lineWidth = Math.max(1.5, cell * 0.05);
     ctx.beginPath();
-    ctx.arc(cx(c), cy(r), cell * 0.24, 0, Math.PI * 2);
+    ctx.arc(cx(c), cy(r), cell * 0.37, 0, Math.PI * 2);
     ctx.stroke();
   }
 

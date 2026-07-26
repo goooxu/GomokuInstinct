@@ -70,9 +70,15 @@ replay:
   disk_keep_shards: 400         # 磁盘上保留的分片数，超出即回收
   symmetry_augment: true        # 8 重二面体对称（纯规则免费增强）
 
-  # 失误挖掘：原始策略 argmax 与 MCTS 最优手价值差距大的局面加权过采样
+  # 失误挖掘：原始策略 argmax 与 MCTS 最优手价值差距大的局面加权过采样。
+  #
+  # !!! 尚未实现 !!! 这一段目前只是占位，replay/trainer 里没有任何代码读它。
+  # 保留在这里是为了记下设计意图，但请勿据此认为它在生效。
+  # 实测「零搜索策略值多少次搜索」这个头号指标在数千步内没有移动，
+  # 而失误挖掘正是方案里用来啃前瞻能力的两条手段之一（另一条部署分布自博弈已实现），
+  # 因此这是下一步要补的东西。
   blunder_mining:
-    enabled: true
+    enabled: false
     value_gap_threshold: 0.15
     oversample_weight: 4.0
     max_fraction_of_batch: 0.2

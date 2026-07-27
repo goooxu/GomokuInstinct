@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 372" width="700" height="372" font-family="sans-serif">
+  <rect x="0" y="0" width="700" height="372" fill="#fbfaf7"/>
+
+  <text x="20" y="24" font-size="14" fill="#3a352e">四张卡：一张训练，三张下棋。之间只有文件，没有网络、没有共享内存、没有 RPC。</text>
+
+  <!-- actors -->
+  <text x="96" y="58" font-size="12.5" fill="#23201c" font-weight="600" text-anchor="middle">自博弈 actor</text>
+  <g fill="#eef3ea" stroke="#a8bfa0">
+    <rect x="24" y="70" width="144" height="46" rx="6"/>
+    <rect x="24" y="126" width="144" height="46" rx="6"/>
+    <rect x="24" y="182" width="144" height="46" rx="6"/>
+  </g>
+  <g font-size="11.5" fill="#23201c" text-anchor="middle">
+    <text x="96" y="90">GPU 1 · actor 0</text>
+    <text x="96" y="146">GPU 2 · actor 1</text>
+    <text x="96" y="202">GPU 3 · actor 2</text>
+  </g>
+  <g font-size="10.5" fill="#5a6a54" text-anchor="middle">
+    <text x="96" y="106">1024 局并行</text>
+    <text x="96" y="162">1024 局并行</text>
+    <text x="96" y="218">1024 局并行</text>
+  </g>
+
+  <!-- 磁盘 -->
+  <rect x="252" y="62" width="180" height="180" rx="8" fill="#f4f2ee" stroke="#c3bcb0" stroke-width="1.6"/>
+  <text x="342" y="84" font-size="12.5" fill="#23201c" text-anchor="middle" font-weight="600">磁盘（唯一的接口）</text>
+
+  <rect x="268" y="96" width="148" height="58" rx="5" fill="#ffffff" stroke="#d8d2c6"/>
+  <text x="342" y="115" font-size="11.5" fill="#23201c" text-anchor="middle">replay/</text>
+  <text x="342" y="132" font-size="10.5" fill="#6b6459" text-anchor="middle">actor0_000123.npz</text>
+  <text x="342" y="147" font-size="10.5" fill="#6b6459" text-anchor="middle">每 65,536 条一个分片</text>
+
+  <rect x="268" y="166" width="148" height="58" rx="5" fill="#ffffff" stroke="#d8d2c6"/>
+  <text x="342" y="185" font-size="11.5" fill="#23201c" text-anchor="middle">checkpoints/</text>
+  <text x="342" y="202" font-size="10.5" fill="#6b6459" text-anchor="middle">latest → step_000030012.pt</text>
+  <text x="342" y="217" font-size="10.5" fill="#6b6459" text-anchor="middle">权重 + 优化器 + 回放池 + RNG</text>
+
+  <!-- trainer -->
+  <rect x="516" y="110" width="160" height="84" rx="6" fill="#dce7f2" stroke="#6f8ab0"/>
+  <text x="596" y="136" font-size="12.5" fill="#23201c" text-anchor="middle" font-weight="600">GPU 0 · trainer</text>
+  <text x="596" y="156" font-size="10.5" fill="#5a7398" text-anchor="middle">扫描新分片 → 回放池</text>
+  <text x="596" y="172" font-size="10.5" fill="#5a7398" text-anchor="middle">训练 → 写 checkpoint</text>
+
+  <!-- 箭头：写分片 -->
+  <path d="M172 93 H230 V120 H262" stroke="#3f6b3a" stroke-width="1.6" fill="none"/>
+  <path d="M172 149 H230 V125" stroke="#3f6b3a" stroke-width="1.6" fill="none"/>
+  <path d="M172 205 H230 V130" stroke="#3f6b3a" stroke-width="1.6" fill="none"/>
+  <polygon points="270,120 260,115 260,125" fill="#3f6b3a"/>
+  <text x="200" y="80" font-size="10.5" fill="#3f6b3a">写样本分片</text>
+
+  <!-- 箭头：trainer 读分片 -->
+  <path d="M420 120 H468 V138 H508" stroke="#6f8ab0" stroke-width="1.6" fill="none"/>
+  <polygon points="516,138 506,133 506,143" fill="#6f8ab0"/>
+  <text x="466" y="112" font-size="10.5" fill="#5a7398">读新分片</text>
+
+  <!-- 箭头：trainer 写 checkpoint -->
+  <path d="M596 198 V218 H444 V200 H424" stroke="#6f8ab0" stroke-width="1.6" fill="none"/>
+  <polygon points="416,200 426,195 426,205" fill="#6f8ab0"/>
+  <text x="500" y="234" font-size="10.5" fill="#5a7398">写 checkpoint</text>
+
+  <!-- 箭头：actor 热加载 -->
+  <path d="M264 196 H212 V236 H96 V232" stroke="#a5642a" stroke-width="1.6" fill="none" stroke-dasharray="5 4"/>
+  <polygon points="96,224 91,234 101,234" fill="#a5642a"/>
+  <text x="180" y="252" font-size="10.5" fill="#a5642a">actor 定期热加载最新权重</text>
+
+  <!-- 故障域 -->
+  <rect x="20" y="272" width="660" height="88" rx="6" fill="#f2f5f8" stroke="#dbe3ec"/>
+  <text x="34" y="292" font-size="12.5" fill="#23201c" font-weight="600">故障域被彻底切开</text>
+  <text x="34" y="312" font-size="11.5" fill="#3a4a5a">actor 挂了　→　数据变慢，trainer 照常训练；重启后从最新 checkpoint 接着下</text>
+  <text x="34" y="330" font-size="11.5" fill="#3a4a5a">trainer 挂了　→　actor 继续产数据堆在磁盘上；重启后从 checkpoint + 分片恢复</text>
+  <text x="34" y="348" font-size="11.5" fill="#3a4a5a">整机被抢占　→　全部重启，从磁盘上的最新状态原地接上。分片与 checkpoint 都是原子写，读不到半个文件。</text>
+</svg>

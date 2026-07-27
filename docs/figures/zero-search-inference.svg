@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 300" width="700" height="300" font-family="sans-serif">
+  <rect x="0" y="0" width="700" height="300" fill="#fbfaf7"/>
+
+  <text x="20" y="24" font-size="14" fill="#3a352e">部署时的全部逻辑：一次前向 → 屏蔽已占点 → argmax。没有搜索、没有开局库、没有兜底。</text>
+
+  <!-- 棋盘 -->
+  <rect x="24" y="58" width="128" height="128" fill="#eccf95" stroke="#c99b56"/>
+  <path d="M38 72 H138 M38 92 H138 M38 112 H138 M38 132 H138 M38 152 H138 M38 172 H138
+           M38 72 V172 M58 72 V172 M78 72 V172 M98 72 V172 M118 72 V172 M138 72 V172"
+        stroke="#8a6534" stroke-width="1" fill="none"/>
+  <circle cx="78" cy="112" r="7" fill="#1a1a1a"/>
+  <circle cx="98" cy="132" r="7" fill="#ffffff" stroke="#8a8378"/>
+  <circle cx="98" cy="112" r="7" fill="#1a1a1a"/>
+  <text x="88" y="204" font-size="11.5" fill="#6b6459" text-anchor="middle">当前局面</text>
+
+  <path d="M160 120 H190" stroke="#8a8378" stroke-width="1.6" fill="none"/>
+  <polygon points="198,120 188,115 188,125" fill="#8a8378"/>
+
+  <!-- 网络 -->
+  <rect x="202" y="88" width="122" height="64" rx="6" fill="#dce7f2" stroke="#6f8ab0"/>
+  <text x="263" y="112" font-size="12" fill="#23201c" text-anchor="middle">InstinctNet</text>
+  <text x="263" y="130" font-size="11" fill="#5a7398" text-anchor="middle">一次前向</text>
+  <text x="263" y="145" font-size="10.5" fill="#5a7398" text-anchor="middle">约 11 ms</text>
+
+  <path d="M330 120 H360" stroke="#8a8378" stroke-width="1.6" fill="none"/>
+  <polygon points="368,120 358,115 358,125" fill="#8a8378"/>
+
+  <!-- 屏蔽 -->
+  <rect x="372" y="88" width="140" height="64" rx="6" fill="#ffffff" stroke="#d8d2c6"/>
+  <text x="442" y="110" font-size="11.5" fill="#23201c" text-anchor="middle">屏蔽已占点</text>
+  <text x="442" y="128" font-size="10.5" fill="#8a8378" text-anchor="middle">legal = boards == EMPTY</text>
+  <text x="442" y="144" font-size="10.5" fill="#a5392a" text-anchor="middle">唯一的非模型逻辑</text>
+
+  <path d="M518 120 H548" stroke="#8a8378" stroke-width="1.6" fill="none"/>
+  <polygon points="556,120 546,115 546,125" fill="#8a8378"/>
+
+  <!-- argmax -->
+  <rect x="560" y="88" width="118" height="64" rx="6" fill="#e7efe5" stroke="#a8bfa0"/>
+  <text x="619" y="112" font-size="12" fill="#23201c" text-anchor="middle">argmax</text>
+  <text x="619" y="132" font-size="10.5" fill="#4a5a44" text-anchor="middle">落子</text>
+
+  <!-- 不做的事 -->
+  <rect x="20" y="222" width="326" height="62" rx="6" fill="#fff6f4" stroke="#e8c9c2"/>
+  <text x="34" y="242" font-size="12" fill="#a5392a" font-weight="600">这里没有的东西</text>
+  <text x="34" y="260" font-size="11.5" fill="#5a5348">树搜索　rollout　开局库　多步推演</text>
+  <text x="34" y="277" font-size="11.5" fill="#5a5348">禁手兜底（--safe-mode 默认关闭）</text>
+
+  <rect x="360" y="222" width="320" height="62" rx="6" fill="#f2f5f8" stroke="#dbe3ec"/>
+  <text x="374" y="242" font-size="12" fill="#23201c" font-weight="600">禁手怎么办</text>
+  <text x="374" y="260" font-size="11.5" fill="#3a4a5a">避开禁手是模型自己要学会的能力。</text>
+  <text x="374" y="277" font-size="11.5" fill="#3a4a5a">实测告负率 0.09%~0.52% —— 不是零。</text>
+</svg>

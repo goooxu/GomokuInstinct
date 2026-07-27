@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 380" width="700" height="380" font-family="sans-serif">
+  <rect x="0" y="0" width="700" height="380" fill="#fbfaf7"/>
+
+  <text x="20" y="24" font-size="14" fill="#3a352e">头号指标：让零搜索策略分别对战不同强度的 MCTS，看它在哪一档掉到 50% 胜率</text>
+
+  <!-- 坐标轴 -->
+  <line x1="80" y1="290" x2="470" y2="290" stroke="#8a8378" stroke-width="1.4"/>
+  <line x1="80" y1="70" x2="80" y2="290" stroke="#8a8378" stroke-width="1.4"/>
+
+  <!-- 50% 参考线 -->
+  <line x1="80" y1="180" x2="452" y2="180" stroke="#b3aca0" stroke-width="1.2" stroke-dasharray="5 4"/>
+
+  <!-- y 轴刻度 -->
+  <g font-size="11" fill="#6b6459" text-anchor="end">
+    <text x="72" y="94">100%</text>
+    <text x="72" y="184">50%</text>
+    <text x="72" y="294">0%</text>
+  </g>
+  <text x="34" y="180" font-size="11.5" fill="#3a352e" transform="rotate(-90 34 180)" text-anchor="middle">零搜索的胜率</text>
+
+  <!-- x 轴刻度 -->
+  <g font-size="11.5" fill="#6b6459" text-anchor="middle">
+    <text x="110" y="310">2</text>
+    <text x="182" y="310">4</text>
+    <text x="254" y="310">8</text>
+    <text x="326" y="310">16</text>
+    <text x="398" y="310">32</text>
+  </g>
+  <text x="254" y="334" font-size="11.5" fill="#3a352e" text-anchor="middle">对手的 MCTS 模拟数（每档 200 局）</text>
+
+  <!-- 曲线 -->
+  <polyline points="110,110 182,158 254,206 326,248 398,272"
+            fill="none" stroke="#6f8ab0" stroke-width="2.4"/>
+  <g fill="#6f8ab0">
+    <circle cx="110" cy="110" r="5"/><circle cx="182" cy="158" r="5"/>
+    <circle cx="254" cy="206" r="5"/><circle cx="326" cy="248" r="5"/>
+    <circle cx="398" cy="272" r="5"/>
+  </g>
+
+  <!-- 交叉点 -->
+  <circle cx="215" cy="180" r="7" fill="none" stroke="#d43b26" stroke-width="2.4"/>
+  <path d="M215 180 L262 132" stroke="#d43b26" stroke-width="1.2" fill="none"/>
+  <text x="266" y="128" font-size="12" fill="#a5392a" font-weight="600">胜率跌破 50% 的档位</text>
+  <text x="266" y="146" font-size="12" fill="#a5392a">= 零搜索的等效搜索强度</text>
+  <line x1="215" y1="180" x2="215" y2="290" stroke="#d43b26" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="215" y="352" font-size="12.5" fill="#a5392a" text-anchor="middle" font-weight="600">4 ~ 8 次模拟</text>
+
+  <!-- 说明 -->
+  <rect x="496" y="66" width="184" height="150" rx="6" fill="#f2f5f8" stroke="#dbe3ec"/>
+  <text x="510" y="88" font-size="12.5" fill="#23201c" font-weight="600">为什么这么量</text>
+  <text x="510" y="110" font-size="11.5" fill="#3a4a5a">直接报 Elo 差会<tspan font-weight="600">饱和</tspan>：</text>
+  <text x="510" y="126" font-size="11.5" fill="#3a4a5a">对手强度一固定，再进步</text>
+  <text x="510" y="142" font-size="11.5" fill="#3a4a5a">就看不出来了。</text>
+  <text x="510" y="166" font-size="11.5" fill="#3a4a5a">改成扫档位后：不饱和、</text>
+  <text x="510" y="182" font-size="11.5" fill="#3a4a5a">单位有意义、跨 checkpoint</text>
+  <text x="510" y="198" font-size="11.5" fill="#3a4a5a">可以直接比。</text>
+
+  <rect x="496" y="228" width="184" height="122" rx="6" fill="#fff6f4" stroke="#e8c9c2"/>
+  <text x="510" y="250" font-size="12.5" fill="#a5392a" font-weight="600">一个骗了很久的 50%</text>
+  <text x="510" y="272" font-size="11.5" fill="#5a5348">两个确定性 player 对弈，</text>
+  <text x="510" y="288" font-size="11.5" fill="#5a5348">每局都是同一盘棋的重放，</text>
+  <text x="510" y="304" font-size="11.5" fill="#5a5348">胜负只由先后手决定 →</text>
+  <text x="510" y="320" font-size="11.5" fill="#5a5348">必然 50%，与棋力无关。</text>
+  <text x="510" y="340" font-size="11.5" fill="#a5392a">修法：每局随机开局 2 子。</text>
+
+  <text x="80" y="368" font-size="11" fill="#8a8378">曲线为示意；step 10,000 时等效强度还不到 2 次模拟，step 30,000 时是 4~8 次。</text>
+</svg>

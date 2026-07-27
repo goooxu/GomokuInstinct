@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 262" width="660" height="262" font-family="sans-serif">
+  <rect x="0" y="0" width="660" height="262" fill="#fbfaf7"/>
+
+  <text x="20" y="26" font-size="14" fill="#3a352e">「四」= 五格窗口里己方占四格、剩一格空。照字面数窗口会把活四误判成四四。</text>
+
+  <!-- ── 活四 ── -->
+  <text x="20" y="82" font-size="15" fill="#23201c" font-weight="600">活四</text>
+  <g font-size="11" fill="#8a8378" text-anchor="middle">
+    <text x="90" y="52">0</text><text x="130" y="52">1</text><text x="170" y="52">2</text>
+    <text x="210" y="52">3</text><text x="250" y="52">4</text><text x="290" y="52">5</text>
+  </g>
+  <line x1="90" y1="76" x2="290" y2="76" stroke="#c9c2b6" stroke-width="1"/>
+  <circle cx="90"  cy="76" r="5"  fill="none" stroke="#b3aca0"/>
+  <circle cx="130" cy="76" r="13" fill="#1a1a1a"/>
+  <circle cx="170" cy="76" r="13" fill="#1a1a1a"/>
+  <circle cx="210" cy="76" r="13" fill="#1a1a1a"/>
+  <circle cx="250" cy="76" r="13" fill="#1a1a1a"/>
+  <circle cx="290" cy="76" r="5"  fill="none" stroke="#b3aca0"/>
+
+  <path d="M74 94 V102 H266 V94" fill="none" stroke="#6f8ab0" stroke-width="1.6"/>
+  <text x="272" y="106" font-size="11.5" fill="#5a7398">窗口 0–4　黑子 {1,2,3,4}</text>
+  <path d="M114 114 V122 H306 V114" fill="none" stroke="#6f8ab0" stroke-width="1.6"/>
+  <text x="312" y="126" font-size="11.5" fill="#5a7398">窗口 1–5　黑子 {1,2,3,4}</text>
+  <text x="474" y="80" font-size="12.5" fill="#3f6b3a" font-weight="600">两组黑子相同</text>
+  <text x="474" y="98" font-size="12.5" fill="#3f6b3a">→ 只算一个四</text>
+  <text x="474" y="116" font-size="12.5" fill="#3f6b3a">→ 活四，合法</text>
+
+  <line x1="20" y1="144" x2="640" y2="144" stroke="#e2dbd0"/>
+
+  <!-- ── 双四 ── -->
+  <text x="20" y="194" font-size="15" fill="#23201c" font-weight="600">双四</text>
+  <g font-size="11" fill="#8a8378" text-anchor="middle">
+    <text x="90" y="164">0</text><text x="130" y="164">1</text><text x="170" y="164">2</text>
+    <text x="210" y="164">3</text><text x="250" y="164">4</text><text x="290" y="164">5</text>
+    <text x="330" y="164">6</text>
+  </g>
+  <line x1="90" y1="188" x2="330" y2="188" stroke="#c9c2b6" stroke-width="1"/>
+  <circle cx="90"  cy="188" r="13" fill="#1a1a1a"/>
+  <circle cx="130" cy="188" r="5"  fill="none" stroke="#b3aca0"/>
+  <circle cx="170" cy="188" r="13" fill="#1a1a1a"/>
+  <circle cx="210" cy="188" r="13" fill="#1a1a1a"/>
+  <circle cx="250" cy="188" r="13" fill="#1a1a1a"/>
+  <circle cx="290" cy="188" r="5"  fill="none" stroke="#b3aca0"/>
+  <circle cx="330" cy="188" r="13" fill="#1a1a1a"/>
+
+  <path d="M74 206 V214 H266 V206" fill="none" stroke="#b0796f" stroke-width="1.6"/>
+  <text x="272" y="218" font-size="11.5" fill="#a05a4a">窗口 0–4　黑子 {0,2,3,4}</text>
+  <path d="M154 226 V234 H346 V226" fill="none" stroke="#b0796f" stroke-width="1.6"/>
+  <text x="352" y="238" font-size="11.5" fill="#a05a4a">窗口 2–6　黑子 {2,3,4,6}</text>
+  <text x="474" y="192" font-size="12.5" fill="#a5392a" font-weight="600">两组黑子不同</text>
+  <text x="474" y="210" font-size="12.5" fill="#a5392a">→ 两个四</text>
+  <text x="474" y="228" font-size="12.5" fill="#a5392a">→ 四四禁手</text>
+</svg>

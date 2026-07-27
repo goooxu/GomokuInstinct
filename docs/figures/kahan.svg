@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 360" width="700" height="360" font-family="sans-serif">
+  <rect x="0" y="0" width="700" height="360" fill="#fbfaf7"/>
+
+  <text x="20" y="24" font-size="14" fill="#3a352e">Kahan 补偿：把每步被舍掉的低位存起来，下一步补回去</text>
+
+  <!-- 流程 -->
+  <rect x="24" y="56" width="104" height="42" rx="5" fill="#ffffff" stroke="#d8d2c6"/>
+  <text x="76" y="82" font-size="12" fill="#23201c" text-anchor="middle">更新量 lr·g</text>
+
+  <path d="M132 77 H156" stroke="#8a8378" stroke-width="1.4" fill="none"/>
+  <circle cx="170" cy="77" r="13" fill="#ffffff" stroke="#8a8378" stroke-width="1.4"/>
+  <text x="170" y="82" font-size="15" fill="#23201c" text-anchor="middle">+</text>
+
+  <rect x="24" y="134" width="120" height="42" rx="5" fill="#fdeee9" stroke="#e0b5a8"/>
+  <text x="84" y="153" font-size="11.5" fill="#a5392a" text-anchor="middle">comp</text>
+  <text x="84" y="168" font-size="10.5" fill="#a5392a" text-anchor="middle">上一步的残差</text>
+  <path d="M144 148 H170 V94" stroke="#c98a78" stroke-width="1.4" fill="none"/>
+  <polygon points="170,86 165,96 175,96" fill="#c98a78"/>
+
+  <path d="M184 77 H208" stroke="#8a8378" stroke-width="1.4" fill="none"/>
+  <text x="196" y="66" font-size="11" fill="#6b6459" text-anchor="middle">y</text>
+
+  <rect x="210" y="56" width="150" height="42" rx="5" fill="#ffffff" stroke="#d8d2c6"/>
+  <text x="285" y="74" font-size="11.5" fill="#23201c" text-anchor="middle">w + y</text>
+  <text x="285" y="90" font-size="10.5" fill="#8a8378" text-anchor="middle">舍入回 BF16（这里丢东西）</text>
+
+  <path d="M364 77 H388" stroke="#8a8378" stroke-width="1.4" fill="none"/>
+  <polygon points="396,77 386,72 386,82" fill="#8a8378"/>
+  <rect x="398" y="56" width="92" height="42" rx="5" fill="#e7efe5" stroke="#a8bfa0"/>
+  <text x="444" y="82" font-size="12" fill="#23201c" text-anchor="middle">新权重 w′</text>
+
+  <path d="M444 102 V126" stroke="#8a8378" stroke-width="1.4" fill="none"/>
+  <rect x="366" y="128" width="156" height="42" rx="5" fill="#ffffff" stroke="#d8d2c6"/>
+  <text x="444" y="146" font-size="11.5" fill="#23201c" text-anchor="middle">applied = w′ − w</text>
+  <text x="444" y="161" font-size="10.5" fill="#8a8378" text-anchor="middle">真正被吃进权重的量</text>
+
+  <path d="M366 149 H300 V128" stroke="#8a8378" stroke-width="1.4" fill="none"/>
+  <rect x="210" y="184" width="180" height="42" rx="5" fill="#fdeee9" stroke="#e0b5a8"/>
+  <text x="300" y="203" font-size="11.5" fill="#a5392a" text-anchor="middle">comp ← y − applied</text>
+  <text x="300" y="218" font-size="10.5" fill="#a5392a" text-anchor="middle">这一步丢掉的部分</text>
+  <path d="M300 128 V184" stroke="#8a8378" stroke-width="1.4" fill="none"/>
+  <polygon points="300,184 295,174 305,174" fill="#8a8378"/>
+
+  <path d="M210 205 H84 V180" stroke="#c98a78" stroke-width="1.4" fill="none" stroke-dasharray="5 4"/>
+  <polygon points="84,172 79,182 89,182" fill="#c98a78"/>
+  <text x="150" y="240" font-size="11" fill="#a5392a" text-anchor="middle">留给下一步</text>
+
+  <rect x="540" y="128" width="140" height="98" rx="5" fill="#f2f5f8" stroke="#dbe3ec"/>
+  <text x="554" y="150" font-size="11.5" fill="#3a4a5a">残差本身很小，</text>
+  <text x="554" y="168" font-size="11.5" fill="#3a4a5a">用 BF16 存完全够：</text>
+  <text x="554" y="188" font-size="11.5" fill="#3a4a5a">BF16 指数位和 FP32</text>
+  <text x="554" y="206" font-size="11.5" fill="#3a4a5a">一样宽，缺的只是</text>
+  <text x="554" y="218" font-size="11.5" fill="#3a4a5a">同一数量级内的精度。</text>
+
+  <line x1="20" y1="256" x2="680" y2="256" stroke="#e2dbd0"/>
+
+  <!-- comp 随步数的锯齿 -->
+  <text x="20" y="280" font-size="12.5" fill="#23201c">comp 随步数累积，攒够半个 ULP 就把权重推进一格：</text>
+  <line x1="60" y1="330" x2="660" y2="330" stroke="#b3aca0" stroke-width="1"/>
+  <polyline points="60,330 200,296 202,344 340,310 342,344 480,310 482,344 620,310"
+            fill="none" stroke="#a5392a" stroke-width="1.8"/>
+  <g fill="#3f6b3a">
+    <circle cx="201" cy="330" r="4"/><circle cx="341" cy="330" r="4"/><circle cx="481" cy="330" r="4"/>
+  </g>
+  <text x="60" y="348" font-size="10.5" fill="#8a8378">步数 →</text>
+  <text x="360" y="290" font-size="11" fill="#3f6b3a">● = 权重真正跳了一格</text>
+</svg>

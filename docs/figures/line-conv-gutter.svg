@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 404" width="700" height="404" font-family="sans-serif">
+  <rect x="0" y="0" width="700" height="404" fill="#fbfaf7"/>
+
+  <text x="20" y="24" font-size="14" fill="#3a352e">补一段 gutter 再展平，四个方向就变成同一条一维序列上的四种 dilation</text>
+  <text x="20" y="42" font-size="11.5" fill="#8a8378">示意用 size=5, radius=2（实际 size=15, radius=4，故 Wp = 19）</text>
+
+  <!-- 二维特征图 + gutter -->
+  <g stroke="#8aa5c4" fill="#dce7f2">
+    <rect x="40" y="56" width="26" height="26"/><rect x="66" y="56" width="26" height="26"/>
+    <rect x="92" y="56" width="26" height="26"/><rect x="118" y="56" width="26" height="26"/>
+    <rect x="144" y="56" width="26" height="26"/>
+    <rect x="40" y="82" width="26" height="26"/><rect x="66" y="82" width="26" height="26"/>
+    <rect x="92" y="82" width="26" height="26"/><rect x="118" y="82" width="26" height="26"/>
+    <rect x="144" y="82" width="26" height="26"/>
+    <rect x="40" y="108" width="26" height="26"/><rect x="66" y="108" width="26" height="26"/>
+    <rect x="92" y="108" width="26" height="26"/><rect x="118" y="108" width="26" height="26"/>
+    <rect x="144" y="108" width="26" height="26"/>
+    <rect x="40" y="134" width="26" height="26"/><rect x="66" y="134" width="26" height="26"/>
+    <rect x="92" y="134" width="26" height="26"/><rect x="118" y="134" width="26" height="26"/>
+    <rect x="144" y="134" width="26" height="26"/>
+    <rect x="40" y="160" width="26" height="26"/><rect x="66" y="160" width="26" height="26"/>
+    <rect x="92" y="160" width="26" height="26"/><rect x="118" y="160" width="26" height="26"/>
+    <rect x="144" y="160" width="26" height="26"/>
+  </g>
+  <g stroke="#b8b2a6" fill="#eceae5">
+    <rect x="170" y="56" width="26" height="26"/><rect x="196" y="56" width="26" height="26"/>
+    <rect x="170" y="82" width="26" height="26"/><rect x="196" y="82" width="26" height="26"/>
+    <rect x="170" y="108" width="26" height="26"/><rect x="196" y="108" width="26" height="26"/>
+    <rect x="170" y="134" width="26" height="26"/><rect x="196" y="134" width="26" height="26"/>
+    <rect x="170" y="160" width="26" height="26"/><rect x="196" y="160" width="26" height="26"/>
+  </g>
+  <rect x="105" y="121" width="26" height="26" fill="#3a4a5a" stroke="#3a4a5a"/>
+
+  <text x="118" y="200" font-size="11.5" fill="#5a7398" text-anchor="middle">真实数据 5 列</text>
+  <text x="196" y="200" font-size="11.5" fill="#8a8378" text-anchor="middle">gutter（补零）</text>
+  <text x="196" y="216" font-size="11.5" fill="#8a8378" text-anchor="middle">宽度 = radius</text>
+  <text x="240" y="100" font-size="12" fill="#3a352e">行宽 Wp = size + radius = 7</text>
+  <text x="240" y="122" font-size="12" fill="#3a352e">按行优先展平成一维 ↓</text>
+  <text x="240" y="150" font-size="11.5" fill="#6b6459">gutter 的作用：竖向和对角采样时下标最多</text>
+  <text x="240" y="167" font-size="11.5" fill="#6b6459">越过行末 radius 格，有它在就一定落进补零区，</text>
+  <text x="240" y="184" font-size="11.5" fill="#6b6459">不会绕回下一行的真实数据。</text>
+
+  <!-- 一维序列 -->
+  <g stroke="#b8b2a6" fill="#f4f2ee">
+    <rect x="40" y="230" width="16" height="22"/><rect x="56" y="230" width="16" height="22"/>
+    <rect x="72" y="230" width="16" height="22"/><rect x="88" y="230" width="16" height="22"/>
+    <rect x="104" y="230" width="16" height="22"/><rect x="120" y="230" width="16" height="22"/>
+    <rect x="136" y="230" width="16" height="22"/><rect x="152" y="230" width="16" height="22"/>
+    <rect x="168" y="230" width="16" height="22"/><rect x="184" y="230" width="16" height="22"/>
+    <rect x="200" y="230" width="16" height="22"/><rect x="216" y="230" width="16" height="22"/>
+    <rect x="232" y="230" width="16" height="22"/><rect x="248" y="230" width="16" height="22"/>
+    <rect x="264" y="230" width="16" height="22"/><rect x="280" y="230" width="16" height="22"/>
+    <rect x="296" y="230" width="16" height="22"/><rect x="312" y="230" width="16" height="22"/>
+    <rect x="328" y="230" width="16" height="22"/><rect x="344" y="230" width="16" height="22"/>
+    <rect x="360" y="230" width="16" height="22"/><rect x="376" y="230" width="16" height="22"/>
+    <rect x="392" y="230" width="16" height="22"/><rect x="408" y="230" width="16" height="22"/>
+    <rect x="424" y="230" width="16" height="22"/><rect x="440" y="230" width="16" height="22"/>
+    <rect x="456" y="230" width="16" height="22"/><rect x="472" y="230" width="16" height="22"/>
+    <rect x="488" y="230" width="16" height="22"/><rect x="504" y="230" width="16" height="22"/>
+    <rect x="520" y="230" width="16" height="22"/><rect x="536" y="230" width="16" height="22"/>
+    <rect x="552" y="230" width="16" height="22"/><rect x="568" y="230" width="16" height="22"/>
+    <rect x="584" y="230" width="16" height="22"/>
+  </g>
+  <rect x="296" y="230" width="16" height="22" fill="#3a4a5a" stroke="#3a4a5a"/>
+  <rect x="312" y="230" width="16" height="22" fill="#bcd6b8" stroke="#3f6b3a"/>
+  <rect x="392" y="230" width="16" height="22" fill="#d9c8ea" stroke="#8a5aa5"/>
+  <rect x="408" y="230" width="16" height="22" fill="#c5d5e8" stroke="#6f8ab0"/>
+  <rect x="424" y="230" width="16" height="22" fill="#eed9bc" stroke="#a5642a"/>
+  <text x="304" y="224" font-size="10.5" fill="#3a4a5a" text-anchor="middle">中心</text>
+
+  <!-- 四条 dilation 弧 -->
+  <path d="M304 252 Q308 274 320 274" fill="none" stroke="#3f6b3a" stroke-width="1.8"/>
+  <path d="M304 252 Q348 300 400 300" fill="none" stroke="#8a5aa5" stroke-width="1.8"/>
+  <path d="M304 252 Q356 324 416 324" fill="none" stroke="#6f8ab0" stroke-width="1.8"/>
+  <path d="M304 252 Q364 348 432 348" fill="none" stroke="#a5642a" stroke-width="1.8"/>
+  <text x="330" y="278" font-size="11" fill="#3f6b3a">+1</text>
+  <text x="410" y="304" font-size="11" fill="#8a5aa5">+6</text>
+  <text x="426" y="328" font-size="11" fill="#6f8ab0">+7</text>
+  <text x="442" y="352" font-size="11" fill="#a5642a">+8</text>
+
+  <!-- 图例 -->
+  <rect x="470" y="262" width="212" height="104" rx="6" fill="#ffffff" stroke="#d8d2c6"/>
+  <text x="484" y="282" font-size="12" fill="#23201c" font-weight="600">方向 → dilation</text>
+  <g font-size="11.5">
+    <text x="484" y="304" fill="#3f6b3a">横　　　　1</text>
+    <text x="484" y="322" fill="#6f8ab0">竖　　　　Wp</text>
+    <text x="484" y="340" fill="#a5642a">主对角　　Wp + 1</text>
+    <text x="484" y="358" fill="#8a5aa5">副对角　　Wp − 1</text>
+  </g>
+
+  <text x="20" y="386" font-size="11.5" fill="#6b6459">通道按方向四等分（要求 channels % 4 == 0），每份用一种 dilation 的 depthwise conv1d。比掩码 9×9 卷积省一个数量级的算力。</text>
+</svg>

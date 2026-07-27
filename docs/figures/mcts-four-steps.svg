@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 388" width="700" height="388" font-family="sans-serif">
+  <rect x="0" y="0" width="700" height="388" fill="#fbfaf7"/>
+
+  <text x="20" y="24" font-size="14" fill="#3a352e">一次模拟（simulation）的四步。跑 400 次之后，看根节点各子节点被访问了多少次。</text>
+
+  <!-- 选中的路径（画在节点之下） -->
+  <path d="M180 74 L142 140 M180 74 L180 140 M180 74 L218 140
+           M180 156 L146 218 M180 156 L214 218"
+        stroke="#c9c2b6" stroke-width="1.6" fill="none"/>
+  <path d="M180 74 L180 140 M180 156 L214 218" stroke="#3f6b3a" stroke-width="3.4" fill="none"/>
+  <path d="M222 234 L196 290 M222 234 L252 290" stroke="#8a8378" stroke-width="1.6"
+        fill="none" stroke-dasharray="5 4"/>
+
+  <!-- 节点 -->
+  <circle cx="180" cy="60" r="16" fill="#dce7f2" stroke="#6f8ab0" stroke-width="1.6"/>
+  <text x="180" y="65" font-size="11" fill="#23201c" text-anchor="middle">根</text>
+  <circle cx="138" cy="148" r="14" fill="#ffffff" stroke="#b3aca0" stroke-width="1.4"/>
+  <circle cx="180" cy="148" r="14" fill="#e7efe5" stroke="#3f6b3a" stroke-width="2"/>
+  <circle cx="222" cy="148" r="14" fill="#ffffff" stroke="#b3aca0" stroke-width="1.4"/>
+  <circle cx="142" cy="226" r="14" fill="#ffffff" stroke="#b3aca0" stroke-width="1.4"/>
+  <circle cx="222" cy="226" r="15" fill="#e7efe5" stroke="#3f6b3a" stroke-width="2.4"/>
+  <text x="222" y="231" font-size="11" fill="#23201c" text-anchor="middle">叶</text>
+  <circle cx="192" cy="300" r="12" fill="none" stroke="#8a8378" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <circle cx="256" cy="300" r="12" fill="none" stroke="#8a8378" stroke-width="1.4" stroke-dasharray="4 3"/>
+
+  <!-- ③ 评估 -->
+  <path d="M240 226 H286" stroke="#6f8ab0" stroke-width="1.6" fill="none"/>
+  <polygon points="294,226 284,221 284,231" fill="#6f8ab0"/>
+  <rect x="296" y="206" width="102" height="40" rx="5" fill="#dce7f2" stroke="#6f8ab0"/>
+  <text x="347" y="223" font-size="11" fill="#23201c" text-anchor="middle">网络评估</text>
+  <text x="347" y="238" font-size="11" fill="#23201c" text-anchor="middle">v = +0.3</text>
+
+  <!-- ④ 回传 -->
+  <path d="M206 216 L192 162" stroke="#d43b26" stroke-width="1.8" fill="none" stroke-dasharray="5 3"/>
+  <path d="M172 132 L172 82" stroke="#d43b26" stroke-width="1.8" fill="none" stroke-dasharray="5 3"/>
+  <polygon points="172,74 167,84 177,84" fill="#d43b26"/>
+  <text x="238" y="192" font-size="10.5" fill="#a5392a">−0.3</text>
+  <text x="140" y="106" font-size="10.5" fill="#a5392a">+0.3</text>
+  <text x="60" y="330" font-size="11" fill="#a5392a">每上一层取一次反号 —— 行棋方换了</text>
+
+  <!-- 步骤说明 -->
+  <text x="424" y="60" font-size="12.5" fill="#3f6b3a" font-weight="600">① 选择</text>
+  <text x="424" y="78" font-size="11.5" fill="#5a5348">从根一路往下选，直到碰上没展开过的节点。</text>
+  <text x="424" y="94" font-size="11.5" fill="#5a5348">选谁由 PUCT 决定。</text>
+
+  <text x="424" y="122" font-size="12.5" fill="#8a8378" font-weight="600">② 扩展</text>
+  <text x="424" y="140" font-size="11.5" fill="#5a5348">列出这个叶子的所有合法着法，</text>
+  <text x="424" y="156" font-size="11.5" fill="#5a5348">先验概率来自网络的策略输出。</text>
+
+  <text x="424" y="184" font-size="12.5" fill="#5a7398" font-weight="600">③ 评估</text>
+  <text x="424" y="202" font-size="11.5" fill="#5a5348">用价值头给叶子局面打分。</text>
+  <text x="424" y="218" font-size="11.5" fill="#5a5348">没有 rollout，不随机走到底。</text>
+
+  <text x="424" y="246" font-size="12.5" fill="#a5392a" font-weight="600">④ 回传</text>
+  <text x="424" y="264" font-size="11.5" fill="#5a5348">分数沿路径加回去，逐层取反。</text>
+
+  <rect x="416" y="286" width="256" height="82" rx="6" fill="#f2f5f8" stroke="#dbe3ec"/>
+  <text x="430" y="306" font-size="12" fill="#23201c" font-weight="600">PUCT：选哪个子节点</text>
+  <text x="430" y="326" font-size="12" fill="#3a4a5a">score = Q + c · P · √N(父) / (1 + n)</text>
+  <text x="430" y="344" font-size="11" fill="#6b6459">Q 越好越想再走；n 在分母上，</text>
+  <text x="430" y="359" font-size="11" fill="#6b6459">试得越多探索项衰减得越快。</text>
+
+  <rect x="20" y="342" width="380" height="34" rx="5" fill="#f4f2ee" stroke="#e2dbd0"/>
+  <text x="34" y="364" font-size="11.5" fill="#5a5348">禁手点的子节点是即时负：访问一次拿到 −1，PUCT 从此不再选它。</text>
+</svg>

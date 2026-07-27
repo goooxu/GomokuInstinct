@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 272" width="620" height="272" font-family="sans-serif">
+  <rect x="0" y="0" width="620" height="272" fill="#fbfaf7"/>
+
+  <text x="310" y="22" font-size="14" fill="#3a352e" text-anchor="middle">黑方的三种禁手　（红圈 = 黑方不能下的那一点）</text>
+
+  <!-- 长连 -->
+  <rect x="16" y="46" width="172" height="172" fill="#eccf95" stroke="#c99b56"/>
+  <path d="M30 60 H174 M30 84 H174 M30 108 H174 M30 132 H174 M30 156 H174 M30 180 H174 M30 204 H174
+           M30 60 V204 M54 60 V204 M78 60 V204 M102 60 V204 M126 60 V204 M150 60 V204 M174 60 V204"
+        stroke="#8a6534" stroke-width="1" fill="none"/>
+  <g fill="#1a1a1a">
+    <circle cx="30" cy="132" r="9"/><circle cx="54" cy="132" r="9"/><circle cx="78" cy="132" r="9"/>
+    <circle cx="102" cy="132" r="9"/><circle cx="126" cy="132" r="9"/><circle cx="150" cy="132" r="9"/>
+  </g>
+  <circle cx="150" cy="132" r="13" fill="none" stroke="#d43b26" stroke-width="2.5"/>
+  <text x="102" y="40" font-size="15" fill="#23201c" text-anchor="middle" font-weight="600">长连</text>
+  <text x="102" y="238" font-size="12" fill="#6b6459" text-anchor="middle">连成六个或更多</text>
+
+  <!-- 四四 -->
+  <rect x="216" y="46" width="172" height="172" fill="#eccf95" stroke="#c99b56"/>
+  <path d="M230 60 H374 M230 84 H374 M230 108 H374 M230 132 H374 M230 156 H374 M230 180 H374 M230 204 H374
+           M230 60 V204 M254 60 V204 M278 60 V204 M302 60 V204 M326 60 V204 M350 60 V204 M374 60 V204"
+        stroke="#8a6534" stroke-width="1" fill="none"/>
+  <g fill="#1a1a1a">
+    <circle cx="254" cy="132" r="9"/><circle cx="278" cy="132" r="9"/><circle cx="326" cy="132" r="9"/>
+    <circle cx="302" cy="84" r="9"/><circle cx="302" cy="108" r="9"/><circle cx="302" cy="156" r="9"/>
+    <circle cx="302" cy="132" r="9"/>
+  </g>
+  <circle cx="302" cy="132" r="13" fill="none" stroke="#d43b26" stroke-width="2.5"/>
+  <text x="302" y="40" font-size="15" fill="#23201c" text-anchor="middle" font-weight="600">四四</text>
+  <text x="302" y="238" font-size="12" fill="#6b6459" text-anchor="middle">一手同时成两个四（横一个、竖一个）</text>
+
+  <!-- 三三 -->
+  <rect x="416" y="46" width="172" height="172" fill="#eccf95" stroke="#c99b56"/>
+  <path d="M430 60 H574 M430 84 H574 M430 108 H574 M430 132 H574 M430 156 H574 M430 180 H574 M430 204 H574
+           M430 60 V204 M454 60 V204 M478 60 V204 M502 60 V204 M526 60 V204 M550 60 V204 M574 60 V204"
+        stroke="#8a6534" stroke-width="1" fill="none"/>
+  <g fill="#1a1a1a">
+    <circle cx="478" cy="132" r="9"/><circle cx="526" cy="132" r="9"/>
+    <circle cx="502" cy="108" r="9"/><circle cx="502" cy="156" r="9"/>
+    <circle cx="502" cy="132" r="9"/>
+  </g>
+  <circle cx="502" cy="132" r="13" fill="none" stroke="#d43b26" stroke-width="2.5"/>
+  <text x="502" y="40" font-size="15" fill="#23201c" text-anchor="middle" font-weight="600">三三</text>
+  <text x="502" y="238" font-size="12" fill="#6b6459" text-anchor="middle">一手同时成两个活三</text>
+
+  <text x="310" y="262" font-size="11.5" fill="#6b6459" text-anchor="middle">白方不受这三条限制，连成五个或更多都算赢</text>
+</svg>

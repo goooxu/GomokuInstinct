@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 690 336" width="690" height="336" font-family="sans-serif">
+  <rect x="0" y="0" width="690" height="336" fill="#fbfaf7"/>
+
+  <text x="20" y="26" font-size="14" fill="#3a352e">一个棋盘 → 10 个 15×15 的平面，沿通道维叠成网络的输入张量</text>
+
+  <!-- 棋盘 -->
+  <rect x="24" y="58" width="152" height="152" fill="#eccf95" stroke="#c99b56"/>
+  <path d="M40 74 H160 M40 98 H160 M40 122 H160 M40 146 H160 M40 170 H160 M40 194 H160
+           M40 74 V194 M64 74 V194 M88 74 V194 M112 74 V194 M136 74 V194 M160 74 V194"
+        stroke="#8a6534" stroke-width="1" fill="none"/>
+  <circle cx="88"  cy="122" r="8" fill="#1a1a1a"/>
+  <circle cx="112" cy="146" r="8" fill="#ffffff" stroke="#8a8378"/>
+  <circle cx="112" cy="122" r="8" fill="#1a1a1a"/>
+  <circle cx="88"  cy="146" r="8" fill="#ffffff" stroke="#8a8378"/>
+  <circle cx="136" cy="122" r="8" fill="#1a1a1a"/>
+  <text x="100" y="232" font-size="12" fill="#6b6459" text-anchor="middle">棋盘</text>
+  <text x="100" y="250" font-size="11.5" fill="#8a8378" text-anchor="middle">(B, 225) uint8</text>
+
+  <path d="M188 134 H222" stroke="#8a8378" stroke-width="1.6" fill="none"/>
+  <polygon points="230,134 220,129 220,139" fill="#8a8378"/>
+  <text x="209" y="122" font-size="11.5" fill="#6b6459" text-anchor="middle">encode</text>
+
+  <!-- 平面组 -->
+  <g stroke="#c3bcb0" fill="#ffffff">
+    <rect x="252" y="58"  width="62" height="62"/><rect x="330" y="58"  width="62" height="62"/>
+    <rect x="408" y="58"  width="62" height="62"/><rect x="486" y="58"  width="62" height="62"/>
+    <rect x="564" y="58"  width="62" height="62"/>
+    <rect x="252" y="176" width="62" height="62"/><rect x="330" y="176" width="62" height="62"/>
+    <rect x="408" y="176" width="62" height="62"/><rect x="486" y="176" width="62" height="62"/>
+    <rect x="564" y="176" width="62" height="62"/>
+  </g>
+
+  <!-- 0 黑子 -->
+  <g fill="#1a1a1a">
+    <circle cx="272" cy="82" r="5"/><circle cx="288" cy="82" r="5"/><circle cx="304" cy="98" r="5"/>
+  </g>
+  <!-- 1 白子 -->
+  <g fill="none" stroke="#5a544a" stroke-width="1.6">
+    <circle cx="350" cy="98" r="5"/><circle cx="366" cy="82" r="5"/>
+  </g>
+  <!-- 2 空点 -->
+  <g fill="#c3bcb0">
+    <circle cx="424" cy="76" r="3"/><circle cx="440" cy="76" r="3"/><circle cx="456" cy="76" r="3"/>
+    <circle cx="424" cy="92" r="3"/><circle cx="456" cy="92" r="3"/>
+    <circle cx="424" cy="108" r="3"/><circle cx="440" cy="108" r="3"/><circle cx="456" cy="108" r="3"/>
+  </g>
+  <!-- 3 常数：轮到黑 -->
+  <rect x="486" y="58" width="62" height="62" fill="#4a4a4a" opacity="0.75"/>
+  <text x="517" y="94" font-size="11" fill="#ffffff" text-anchor="middle">全 1</text>
+  <!-- 4 最近一手 -->
+  <circle cx="600" cy="90" r="6" fill="#d43b26"/>
+
+  <!-- 5,6,7 历史 -->
+  <circle cx="276" cy="212" r="6" fill="#d9836f"/>
+  <circle cx="360" cy="200" r="6" fill="#e0a394"/>
+  <circle cx="432" cy="220" r="6" fill="#e8c0b6"/>
+  <!-- 8 手数 -->
+  <rect x="486" y="176" width="62" height="62" fill="#6f8ab0" opacity="0.55"/>
+  <text x="517" y="212" font-size="10.5" fill="#ffffff" text-anchor="middle">手数/225</text>
+  <!-- 9 中心距离 -->
+  <g fill="none" stroke="#6f8ab0">
+    <rect x="572" y="184" width="46" height="46" opacity="0.3"/>
+    <rect x="580" y="192" width="30" height="30" opacity="0.55"/>
+    <rect x="588" y="200" width="14" height="14" opacity="0.85"/>
+  </g>
+
+  <g font-size="11" fill="#6b6459" text-anchor="middle">
+    <text x="283" y="136">0　黑子</text>
+    <text x="361" y="136">1　白子</text>
+    <text x="439" y="136">2　空点</text>
+    <text x="517" y="136">3　轮到黑</text>
+    <text x="595" y="136">4　最近一手</text>
+    <text x="283" y="254">5　最近二手</text>
+    <text x="361" y="254">6　最近三手</text>
+    <text x="439" y="254">7　最近四手</text>
+    <text x="517" y="254">8　手数</text>
+    <text x="595" y="254">9　中心距离</text>
+  </g>
+
+  <rect x="24" y="278" width="642" height="42" rx="6" fill="#f2f5f8" stroke="#dbe3ec"/>
+  <text x="40" y="296" font-size="12" fill="#3a4a5a">输出 <tspan font-weight="600">(B, 10, 15, 15) bfloat16</tspan>　—— 10 个平面在八重对称下全部同变，所以一个局面可以免费增强成 8 个。</text>
+  <text x="40" y="313" font-size="12" fill="#3a4a5a">刻意<tspan font-weight="600">不含</tspan>活三/冲四这类手工战术特征：它们改为让网络自己预测的辅助监督目标。</text>
+</svg>

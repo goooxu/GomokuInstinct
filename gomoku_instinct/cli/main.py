@@ -32,6 +32,7 @@ def _cmd_serve(args) -> int:
         device=args.device,
         safe_mode=args.safe_mode,
         temperature=args.temperature,
+        reload_seconds=args.reload_seconds,
     )
 
 
@@ -136,6 +137,10 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--safe-mode", action="store_true",
                               help="用规则替 AI 屏蔽禁手点。默认关闭")
     serve_parser.add_argument("--temperature", type=float, default=0.0)
+    serve_parser.add_argument(
+        "--reload-seconds", type=float, default=0.0,
+        help="每隔这么久检查一次 run 目录里有没有更新的 checkpoint，"
+             "有就热加载（0 表示不检查）。只对 run 目录生效。")
     serve_parser.set_defaults(func=_cmd_serve)
 
     arena_parser = sub.add_parser("arena", help="模型间/对基线的批量对局与 Elo 估计")

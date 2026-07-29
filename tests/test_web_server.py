@@ -439,3 +439,91 @@ def test_tiny_probabilities_do_not_render_as_zero():
 def test_color_select_offers_both_sides():
     page = _page()
     assert 'value="black"' in page and 'value="white"' in page
+
+
+# ── 热加载 ──────────────────────────────────────────────────────────────────
+#
+# 试玩服务盯着 run 目录，训练每落一个新 checkpoint 就换上，这样页面顶部的 step
+# 会跟着训练走。这里最要紧的两条：换不上时必须继续用旧权重服务，
+# 以及绝不能在半路把 meta 改成一半新一半旧。
+
+
+class _StubModel:
+    def __init__(self, fail: bool = False) -> None:
+        self.loaded: list = []
+        self.fail = fail
+
+    def load_state_dict(self, state) -> None:
+        if self.fail:
+            raise RuntimeError("网络结构对不上")
+        self.loaded.append(state)
+
+
+def _make_app_with_model(model):
+    player = _StubPlayer()
+    player.model = model
+    return App(player, {"step": 0, "path": None}, SIZE)
+
+
+def _write_ckpt(run_dir, step: int) -> str:
+    import torch
+
+    ckpt_dir = run_dir / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    name = f"step_{step:09d}.pt"
+    torch.save({"model": {"w": step}, "step": step, "cycle": step // 10},
+               ckpt_dir / name)
+    (ckpt_dir / "latest").write_text(name)
+    return name
+
+
+def test_reload_picks_up_new_checkpoint(tmp_path):
+    model = _StubModel()
+    app = _make_app_with_model(model)
+
+    _write_ckpt(tmp_path, 100)
+    app._reload_once(str(tmp_path))
+    assert app.meta["step"] == 100
+    assert model.loaded == [{"w": 100}]
+
+    _write_ckpt(tmp_path, 250)
+    app._reload_once(str(tmp_path))
+    assert app.meta["step"] == 250
+    assert len(model.loaded) == 2
+
+
+def test_reload_is_noop_when_latest_unchanged(tmp_path):
+    model = _StubModel()
+    app = _make_app_with_model(model)
+
+    _write_ckpt(tmp_path, 100)
+    app._reload_once(str(tmp_path))
+    app._reload_once(str(tmp_path))
+    # 每 N 秒查一次，绝大多数时候没有新权重；不能每次都把 53MB 重读一遍
+    assert len(model.loaded) == 1
+
+
+def test_reload_failure_keeps_old_weights(tmp_path):
+    model = _StubModel(fail=True)
+    app = _make_app_with_model(model)
+    app.meta = {"step": 7, "path": "旧的"}
+
+    _write_ckpt(tmp_path, 100)
+    with pytest.raises(RuntimeError):
+        app._reload_once(str(tmp_path))
+
+    # 关键：load 抛了以后 meta 不能被改动，否则页面会显示一个并没有装上的 step
+    assert app.meta == {"step": 7, "path": "旧的"}
+
+
+def test_watching_ignores_plain_file(tmp_path):
+    """指到具体某个 .pt 时不监视 —— 那是「我就要这一版」的意思。"""
+    model = _StubModel()
+    app = _make_app_with_model(model)
+    name = _write_ckpt(tmp_path, 100)
+    path = str(tmp_path / "checkpoints" / name)
+
+    before = threading.active_count()
+    app.start_watching(path, 1.0)
+    app.start_watching(str(tmp_path), 0.0)  # 间隔为 0 同样不监视
+    assert threading.active_count() == before

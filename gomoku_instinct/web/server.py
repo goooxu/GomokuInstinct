@@ -17,13 +17,16 @@ import json
 import os
 import secrets
 import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import torch
+
 from ..cli.engine import InstinctPlayer
 from ..cli.render import move_to_label
-from ..model.loader import load_model
+from ..model.loader import load_model, resolve_checkpoint
 from ..rules import BLACK, WHITE, ForbiddenSemantics, Game, Outcome, RenjuRules
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -89,6 +92,46 @@ class App:
     def warmup(self) -> None:
         """先在推理线程上跑一次空盘，把句柄建好，免得第一手卡一下。"""
         self.analyze(Game(self.size, self.rules, ForbiddenSemantics.LOSE))
+
+    # ── 热加载 ──────────────────────────────────────────────────────────────
+    def _reload_once(self, source: str) -> None:
+        """把 run 目录里最新的权重换进来。只在推理线程上跑。"""
+        path = resolve_checkpoint(source)
+        if path == self.meta.get("path"):
+            return
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        # 只换权重、不换结构。结构真的变了 load_state_dict 会抛，
+        # 由外层记下来并保留旧权重继续服务 —— 好过悄悄换上一个对不上的网络。
+        self.player.model.load_state_dict(state["model"])
+        # 整个 dict 一次性换掉：state() 读 meta 时没有加锁，重新绑定属性是原子的，
+        # 逐个字段改则可能被读到一半新一半旧。
+        self.meta = dict(
+            self.meta,
+            path=path,
+            step=state.get("step", 0),
+            cycle=state.get("cycle", 0),
+        )
+        print(f"[serve] 热加载 step {self.meta['step']:,}"
+              f"（{os.path.basename(path)}）", flush=True)
+
+    def start_watching(self, source: str, interval: float) -> None:
+        """盯着 run 目录，训练每落一个新 checkpoint 就换上。
+
+        只对 run 目录生效；直接指到某个 .pt 文件时不监视（那是"我就要这一版"的意思）。
+        重新载入必须**排到推理线程上**执行，否则会和正在进行的一次前向抢同一个模型。
+        """
+        if interval <= 0 or not os.path.isdir(source):
+            return
+
+        def loop() -> None:
+            while True:
+                time.sleep(interval)
+                try:
+                    self._infer.submit(self._reload_once, source).result()
+                except Exception as exc:  # 换不上就继续用旧的，别把服务弄挂
+                    print(f"[serve] 热加载失败（下轮重试）：{exc}", flush=True)
+
+        threading.Thread(target=loop, daemon=True, name="gi-reload").start()
 
     def new_session(self, human: int) -> tuple[str, Session]:
         while len(self.sessions) >= MAX_SESSIONS:
@@ -361,13 +404,21 @@ def serve(
     device: str = "cpu",
     safe_mode: bool = False,
     temperature: float = 0.0,
+    reload_seconds: float = 0.0,
 ) -> int:
     app = build_app(checkpoint, device, safe_mode, temperature)
     app.warmup()
+    app.start_watching(checkpoint, reload_seconds)
     httpd = ThreadingHTTPServer((host, port), functools.partial(Handler, app))
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "") else host
     print(f"权重 step {app.meta['step']:,}   棋盘 {app.size}x{app.size}   设备 {device}")
     print("AI 落子完全由一次网络前向决定，不使用任何搜索。")
+    if reload_seconds > 0 and os.path.isdir(checkpoint):
+        print(f"每 {reload_seconds:.0f} 秒检查一次新 checkpoint，"
+              "页面顶部的 step 会跟着变。")
+    else:
+        # 说清楚"不会变"，免得对着一个固定快照以为在看训练进度。
+        print("权重固定，不会随训练更新。")
     if host == "0.0.0.0":
         print("警告：监听了所有网卡，同网段的人都能打开这个页面（无认证）。")
     print(f"\n打开 http://{shown}:{httpd.server_address[1]}/   Ctrl-C 退出")

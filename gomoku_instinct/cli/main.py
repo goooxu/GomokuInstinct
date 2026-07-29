@@ -126,7 +126,9 @@ def main(argv: list[str] | None = None) -> int:
     play_parser.set_defaults(func=_cmd_play)
 
     serve_parser = sub.add_parser("serve", help="启动网页版对战")
-    serve_parser.add_argument("--ckpt", required=True, help="checkpoint 文件或 run 目录")
+    serve_parser.add_argument(
+        "--ckpt", required=True, action="append",
+        help="checkpoint 文件或 run 目录。可多次指定，页面上能切换；第一个是初始模型")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.add_argument(
         "--host",

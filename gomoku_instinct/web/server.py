@@ -71,10 +71,21 @@ class Session:
 class App:
     """服务端的全部可变状态。会话改动在锁下进行，推理另有一条专属线程。"""
 
-    def __init__(self, player: InstinctPlayer, meta: dict, size: int) -> None:
+    def __init__(
+        self,
+        player: InstinctPlayer,
+        meta: dict,
+        size: int,
+        sources: list[dict] | None = None,
+        device: str = "cpu",
+    ) -> None:
         self.player = player
         self.meta = meta
         self.size = size
+        # 可在页面上切换的模型。每项 {"name": 显示名, "path": --ckpt 给的原始路径}
+        self.sources = list(sources or [])
+        self.active = 0
+        self.device = device
         self.rules = RenjuRules()
         self.lock = threading.Lock()
         self.sessions: OrderedDict[str, Session] = OrderedDict()
@@ -114,24 +125,83 @@ class App:
         print(f"[serve] 热加载 step {self.meta['step']:,}"
               f"（{os.path.basename(path)}）", flush=True)
 
-    def start_watching(self, source: str, interval: float) -> None:
-        """盯着 run 目录，训练每落一个新 checkpoint 就换上。
+    def active_source(self) -> str | None:
+        if not self.sources:
+            return None
+        return self.sources[self.active]["path"]
+
+    def should_follow(self) -> bool:
+        """当前选中的这个源要不要跟着训练更新。
+
+        只有 run 目录才跟；直接指到某个 .pt 文件是"我就要这一版"的意思。
+        """
+        source = self.active_source()
+        return source is not None and os.path.isdir(source)
+
+    def start_watching(self, interval: float) -> None:
+        """盯着当前选中的 run 目录，训练每落一个新 checkpoint 就换上。
 
         只对 run 目录生效；直接指到某个 .pt 文件时不监视（那是"我就要这一版"的意思）。
         重新载入必须**排到推理线程上**执行，否则会和正在进行的一次前向抢同一个模型。
+
+        每一轮都重新取一次当前选中的源 —— 页面上换了模型之后，
+        该跟的是新选的那个，而不是启动时那个。
         """
-        if interval <= 0 or not os.path.isdir(source):
+        if interval <= 0:
             return
 
         def loop() -> None:
             while True:
                 time.sleep(interval)
+                if not self.should_follow():
+                    continue
+                source = self.active_source()
                 try:
                     self._infer.submit(self._reload_once, source).result()
                 except Exception as exc:  # 换不上就继续用旧的，别把服务弄挂
                     print(f"[serve] 热加载失败（下轮重试）：{exc}", flush=True)
 
         threading.Thread(target=loop, daemon=True, name="gi-reload").start()
+
+    # ── 切换模型 ────────────────────────────────────────────────────────────
+    def _switch_once(self, index: int) -> None:
+        """整个模型换掉。只在推理线程上跑。
+
+        这里用 load_model 重新建一个网络，而不是像热加载那样 load_state_dict ——
+        不同的 run 可能是不同的结构（层数、通道数都记在各自的 checkpoint 里），
+        往现有网络里灌权重会直接对不上。
+        """
+        src = self.sources[index]
+        model, meta = load_model(src["path"], self.device)
+        if meta["board_size"] != self.size:
+            raise RuntimeError(
+                f"{src['name']} 是 {meta['board_size']}x{meta['board_size']} 的模型，"
+                f"当前服务开在 {self.size}x{self.size}，中途换不了"
+            )
+        self.player.model = model
+        self.active = index
+        self.meta = meta
+        print(f"[serve] 切到 {src['name']}   step {meta['step']:,}", flush=True)
+
+    def switch_model(self, index: int) -> None:
+        if not 0 <= index < len(self.sources):
+            raise IndexError("没有这个模型")
+        self._infer.submit(self._switch_once, index).result()
+
+    def model_list(self) -> list[dict]:
+        out = []
+        for i, src in enumerate(self.sources):
+            live = os.path.isdir(src["path"])
+            step = self.meta.get("step") if i == self.active else _peek_step(src["path"])
+            out.append({
+                "id": i,
+                "name": src["name"],
+                "step": step,
+                "active": i == self.active,
+                # run 目录会随训练更新；直接指到 .pt 的是固定快照
+                "live": live,
+            })
+        return out
 
     def new_session(self, human: int) -> tuple[str, Session]:
         while len(self.sessions) >= MAX_SESSIONS:
@@ -281,6 +351,8 @@ class Handler(BaseHTTPRequestHandler):
             self._static("index.html")
         elif path.startswith("/static/"):
             self._static(path[len("/static/"):])
+        elif path == "/api/models":
+            self._json({"models": self.app.model_list()})
         elif path == "/api/state":
             query = self.path.split("?", 1)[1] if "?" in self.path else ""
             sid = ""
@@ -302,6 +374,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/undo": self._api_undo,
             "/api/hint": self._api_hint,
             "/api/resign": self._api_resign,
+            "/api/model": self._api_model,
         }
         handler = handlers.get(path)
         if handler is None:
@@ -318,6 +391,22 @@ class Handler(BaseHTTPRequestHandler):
         if human == WHITE:
             self.app.ai_move(session)  # AI 执黑先行
         self._json(self.app.state(sid, session))
+
+    def _api_model(self, payload: dict) -> None:
+        index = payload.get("id")
+        if not isinstance(index, int):
+            self._json({"error": "id 必须是整数"}, 400)
+            return
+        try:
+            self.app.switch_model(index)
+        except IndexError:
+            self._json({"error": "没有这个模型"}, 404)
+            return
+        except Exception as exc:
+            # 换不上就继续用原来那个，把原因告诉页面而不是静默失败
+            self._json({"error": f"切换失败：{exc}"}, 409)
+            return
+        self._json({"models": self.app.model_list()})
 
     def _api_move(self, payload: dict) -> None:
         session = self._session(payload)
@@ -383,22 +472,44 @@ class Handler(BaseHTTPRequestHandler):
         self._json(self.app.state(payload["sid"], session))
 
 
+def _peek_step(source: str) -> int | None:
+    """从 checkpoint 的文件名里读 step，不去真的加载 53MB 权重。
+
+    只是给页面上的下拉框标个"这个模型练到哪了"，为此把每个候选都 torch.load
+    一遍太贵；文件名本来就是 step_000003088.pt 这个格式。
+    """
+    try:
+        name = os.path.basename(resolve_checkpoint(source))
+    except (OSError, ValueError):
+        return None
+    stem = os.path.splitext(name)[0]
+    if stem.startswith("step_") and stem[5:].isdigit():
+        return int(stem[5:])
+    return None
+
+
+def _source_entry(path: str) -> dict:
+    return {"name": os.path.basename(os.path.normpath(path)) or path, "path": path}
+
+
 def build_app(
-    checkpoint: str,
+    checkpoint: str | list[str],
     device: str = "cpu",
     safe_mode: bool = False,
     temperature: float = 0.0,
 ) -> App:
-    model, meta = load_model(checkpoint, device)
+    paths = [checkpoint] if isinstance(checkpoint, str) else list(checkpoint)
+    model, meta = load_model(paths[0], device)
     size = meta["board_size"]
     player = InstinctPlayer(
         model, size, device, safe_mode=safe_mode, temperature=temperature
     )
-    return App(player, meta, size)
+    return App(player, meta, size,
+               sources=[_source_entry(p) for p in paths], device=device)
 
 
 def serve(
-    checkpoint: str,
+    checkpoint: str | list[str],
     host: str = "127.0.0.1",
     port: int = 8000,
     device: str = "cpu",
@@ -408,12 +519,14 @@ def serve(
 ) -> int:
     app = build_app(checkpoint, device, safe_mode, temperature)
     app.warmup()
-    app.start_watching(checkpoint, reload_seconds)
+    app.start_watching(reload_seconds)
     httpd = ThreadingHTTPServer((host, port), functools.partial(Handler, app))
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "") else host
     print(f"权重 step {app.meta['step']:,}   棋盘 {app.size}x{app.size}   设备 {device}")
     print("AI 落子完全由一次网络前向决定，不使用任何搜索。")
-    if reload_seconds > 0 and os.path.isdir(checkpoint):
+    if len(app.sources) > 1:
+        print("可切换的模型：" + "、".join(s["name"] for s in app.sources))
+    if reload_seconds > 0 and os.path.isdir(app.active_source() or ""):
         print(f"每 {reload_seconds:.0f} 秒检查一次新 checkpoint，"
               "页面顶部的 step 会跟着变。")
     else:

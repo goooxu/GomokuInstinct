@@ -516,14 +516,93 @@ def test_reload_failure_keeps_old_weights(tmp_path):
     assert app.meta == {"step": 7, "path": "旧的"}
 
 
-def test_watching_ignores_plain_file(tmp_path):
-    """指到具体某个 .pt 时不监视 —— 那是「我就要这一版」的意思。"""
-    model = _StubModel()
-    app = _make_app_with_model(model)
-    name = _write_ckpt(tmp_path, 100)
-    path = str(tmp_path / "checkpoints" / name)
-
+def test_watching_disabled_when_interval_is_zero(tmp_path):
+    app = _make_app_with_model(_StubModel())
+    app.sources = [{"name": "r", "path": str(tmp_path)}]
     before = threading.active_count()
-    app.start_watching(path, 1.0)
-    app.start_watching(str(tmp_path), 0.0)  # 间隔为 0 同样不监视
+    app.start_watching(0.0)
     assert threading.active_count() == before
+
+
+def test_only_run_dirs_are_followed(tmp_path):
+    """指到具体某个 .pt 时不跟 —— 那是「我就要这一版」的意思。"""
+    app = _make_app_with_model(_StubModel())
+    name = _write_ckpt(tmp_path, 100)
+
+    app.sources = [{"name": "run", "path": str(tmp_path)}]
+    assert app.should_follow() is True
+
+    app.sources = [{"name": "pin", "path": str(tmp_path / "checkpoints" / name)}]
+    assert app.should_follow() is False
+
+    app.sources = []
+    assert app.should_follow() is False
+
+
+# ── 页面上切换模型 ──────────────────────────────────────────────────────────
+
+
+def test_peek_step_reads_from_filename(tmp_path):
+    """列表里那个 step 是从文件名解析的，不该为了标个数字去 load 53MB 权重。"""
+    from gomoku_instinct.web import server as server_mod
+
+    _write_ckpt(tmp_path, 4321)
+    assert server_mod._peek_step(str(tmp_path)) == 4321
+    assert server_mod._peek_step(str(tmp_path / "不存在")) is None
+
+
+def test_model_list_marks_active_and_live(tmp_path):
+    app = _make_app_with_model(_StubModel())
+    _write_ckpt(tmp_path, 900)
+    pinned = str(tmp_path / "checkpoints" / "step_000000900.pt")
+    app.sources = [{"name": "训练中", "path": str(tmp_path)},
+                   {"name": "固定版", "path": pinned}]
+    app.meta = {"step": 950, "path": "x"}
+
+    items = app.model_list()
+    assert [m["active"] for m in items] == [True, False]
+    assert [m["live"] for m in items] == [True, False]
+    # 选中的那个以当前 meta 为准（热加载后会比文件名新），未选中的才去看文件名
+    assert items[0]["step"] == 950
+    assert items[1]["step"] == 900
+
+
+def test_switch_model_swaps_model_and_meta(tmp_path, monkeypatch):
+    from gomoku_instinct.web import server as server_mod
+
+    app = _make_app_with_model(_StubModel())
+    app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
+    sentinel = object()
+    monkeypatch.setattr(
+        server_mod, "load_model",
+        lambda path, device: (sentinel, {"step": 77, "board_size": SIZE, "path": path}),
+    )
+
+    app.switch_model(1)
+    assert app.active == 1
+    assert app.meta["step"] == 77
+    # 换 run 要整个换网络，不是往旧网络里灌权重 —— 不同 run 的结构可能不一样
+    assert app.player.model is sentinel
+
+
+def test_switch_model_rejects_other_board_size(tmp_path, monkeypatch):
+    from gomoku_instinct.web import server as server_mod
+
+    app = _make_app_with_model(_StubModel())
+    app.sources = [{"name": "a", "path": "A"}, {"name": "小棋盘", "path": "B"}]
+    monkeypatch.setattr(
+        server_mod, "load_model",
+        lambda path, device: (object(), {"step": 1, "board_size": 9, "path": path}),
+    )
+
+    with pytest.raises(RuntimeError):
+        app.switch_model(1)
+    # 换不上就必须保持原样，否则页面显示的和真正在下棋的不是同一个模型
+    assert app.active == 0
+
+
+def test_switch_model_rejects_bad_index():
+    app = _make_app_with_model(_StubModel())
+    app.sources = [{"name": "a", "path": "A"}]
+    with pytest.raises(IndexError):
+        app.switch_model(5)

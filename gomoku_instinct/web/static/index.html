@@ -28,6 +28,13 @@
 
   #panel { flex: 0 0 300px; background: var(--panel); border: 1px solid var(--border);
            border-radius: 8px; padding: 14px 16px; }
+
+  /* 窄屏改成纵向排列。#panel 是 flex: 0 0 300px（不收缩），横着放不下时会把
+     #boardWrap 挤成负宽度，棋盘直接错乱。这里必须显式换向，光靠 flex 收缩救不回来。 */
+  @media (max-width: 700px) {
+    #app { flex-direction: column; align-items: stretch; }
+    #panel { flex: 1 1 auto; width: 100%; }
+  }
   h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .02em; }
   .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
@@ -85,6 +92,9 @@
     <div id="status"></div>
     <div id="msg"></div>
 
+    <div class="row" id="modelRow" style="display:none">
+      <select id="model" style="flex:1 1 auto; min-width:0"></select>
+    </div>
     <div class="row">
       <select id="color">
         <option value="black">我执黑（先手）</option>
@@ -184,12 +194,55 @@ async function guard(fn) {
 const startGame = (color) => guard(() => api("/api/new", { color }));
 const newGame = () => startGame($("color").value);
 
+// ── 模型切换 ────────────────────────────────────────────────────────────────
+let MODELS = [];
+
+const modelLabel = (m) =>
+  m.name +
+  (m.step === null || m.step === undefined ? "" : "　step " + m.step.toLocaleString()) +
+  (m.live ? "　⟳" : "");   // ⟳ 表示这个 run 还在训练，会随 checkpoint 更新
+
+function renderModels() {
+  const row = $("modelRow"), sel = $("model");
+  if (MODELS.length < 2) { row.style.display = "none"; return; }
+  row.style.display = "flex";
+  // 选中那个的 step 以对局状态为准：热加载后它自己会往上走，
+  // 不必为此再向服务端多要一次列表。
+  const active = MODELS.find((m) => m.active);
+  if (active && S) active.step = S.step;
+  // 用 new Option 而不是拼 innerHTML —— 名字来自命令行给的路径，不该被当 HTML 解析。
+  sel.replaceChildren(...MODELS.map((m) => {
+    const o = new Option(modelLabel(m), String(m.id));
+    o.selected = !!m.active;
+    return o;
+  }));
+}
+
+async function loadModels() {
+  try {
+    MODELS = (await fetch("/api/models").then((r) => r.json())).models || [];
+  } catch (err) {
+    MODELS = [];
+  }
+  renderModels();
+}
+
 // ── 绘制 ────────────────────────────────────────────────────────────────────
+const STACK_QUERY = "(max-width: 700px)";
+
 function resize() {
   if (!S) return;
   const wrap = $("boardWrap");
-  const avail = Math.min(wrap.clientWidth, window.innerHeight - 34);
-  px = Math.max(280, Math.floor(avail));
+  // 纵向排列时面板在棋盘下方，棋盘只受宽度约束；横向排列时还要留出窗口高度，
+  // 不然棋盘会长过一屏。
+  const stacked = window.matchMedia(STACK_QUERY).matches;
+  const avail = stacked
+    ? wrap.clientWidth
+    : Math.min(wrap.clientWidth, window.innerHeight - 34);
+  // **不能**再把它抬到一个固定下限。原来写的是 Math.max(280, avail)：
+  // 容器窄于 280px 时画布就比容器还宽，右边一列连同坐标直接被切掉 ——
+  // 纵向排列 + 窄屏时必现。棋盘宁可小，也不能超出容器。
+  px = Math.floor(Math.max(1, avail));
   cell = px / (S.size + 1);
   const dpr = window.devicePixelRatio || 1;
   canvas.width = px * dpr;
@@ -419,6 +472,9 @@ function render() {
   if (!S) return;
   $("meta").textContent =
     `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手　零搜索`;
+  // 切换失败时（比如两个模型棋盘尺寸不一样）下拉框要弹回真正生效的那个，
+  // 否则页面显示的和实际在下棋的不是同一个模型。
+  renderModels();
   $("status").textContent = statusText();
   $("status").classList.toggle("over", S.outcome !== "ongoing");
 
@@ -526,6 +582,15 @@ $("color").onchange = () => {
   }
   newGame();
 };
+$("model").onchange = () => {
+  const id = Number($("model").value);
+  // 换模型**不重开对局** —— 摆着同一个局面换个对手来走，正是对比强弱最直接的用法。
+  guard(async () => {
+    MODELS = (await api("/api/model", { id })).models || MODELS;
+    return await fetch("/api/state?sid=" + encodeURIComponent(S.sid))
+      .then((r) => r.json());
+  });
+};
 $("undo").onclick = () => guard(() => api("/api/undo", { sid: S.sid }));
 $("hint").onclick = () => guard(() => api("/api/hint", { sid: S.sid }));
 $("resign").onclick = () => guard(() => api("/api/resign", { sid: S.sid }));
@@ -540,7 +605,7 @@ $("moves").onclick = (ev) => {
 };
 window.addEventListener("resize", resize);
 
-newGame().then(resize);
+newGame().then(() => { resize(); loadModels(); });
 </script>
 </body>
 </html>

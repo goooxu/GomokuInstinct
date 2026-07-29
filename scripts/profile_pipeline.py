@@ -82,7 +82,12 @@ class _Span:
 
 def profile_actor(model, cfg, device, size, iters: int, threads: int) -> None:
     timer = Timer()
-    evaluator = ModelEvaluator(model, size, device)
+    # 必须和 scripts/actor.py 一样编译。这个模型又小又深（4.44M 参数、20 个 block、
+    # 每个 block 一串小算子），瓶颈是 kernel 启动开销与显存往返而不是浮点量，
+    # torch.compile 把逐元素算子融掉能快一倍多。拿裸模型测出来的耗时会系统性偏高
+    # 一倍以上，而且不报任何错 —— 一个专门用来测性能的工具测的却不是生产配置。
+    forward = torch.compile(model) if cfg.compile else model
+    evaluator = ModelEvaluator(forward, size, device)
     actor = SelfPlayActor(
         evaluator,
         board_size=size,
@@ -180,12 +185,15 @@ def profile_trainer(model, cfg, model_cfg, device, size, buffer, iters: int) -> 
     optimizer = build_optimizer(model, {"train": {"optim": {"lr": 1e-4}}})
     weights = LossWeights()
     rng = np.random.default_rng(0)
+    # 同 profile_actor：生产训练开着 compile，裸模型测出来的一步会慢一倍以上。
+    # 优化器和梯度裁剪仍然作用在原始 module 上，编译只包前向。
+    forward = torch.compile(model) if cfg.compile else model
 
-    for _ in range(10):  # 预热
+    for _ in range(10):  # 预热（顺带触发编译）
         batch = buffer.sample(cfg.batch_size, device, rng)
         planes = encode(batch.boards, batch.to_move, batch.history,
                         batch.move_number, size, dtype=torch.bfloat16)
-        loss, _ = compute_losses(model(planes), batch, weights, 0,
+        loss, _ = compute_losses(forward(planes), batch, weights, 0,
                                  model_cfg.threat_levels)
         loss.backward()
         optimizer.step()
@@ -198,7 +206,7 @@ def profile_trainer(model, cfg, model_cfg, device, size, buffer, iters: int) -> 
             planes = encode(batch.boards, batch.to_move, batch.history,
                             batch.move_number, size, dtype=torch.bfloat16)
         with timer("前向"):
-            out = model(planes)
+            out = forward(planes)
         with timer("多头损失"):
             loss, _ = compute_losses(out, batch, weights, 0, model_cfg.threat_levels)
         with timer("反向"):
@@ -229,7 +237,8 @@ def main() -> int:
     model_cfg = ModelConfig(**{k: v for k, v in vars(model.cfg).items()})
     device = torch.device(args.device)
 
-    print(f"权重 step {meta['step']:,}   棋盘 {size}x{size}   设备 {args.device}")
+    print(f"权重 step {meta['step']:,}   棋盘 {size}x{size}   设备 {args.device}   "
+          f"torch.compile {'开' if tcfg.compile else '关'}")
     print(model.parameter_summary())
 
     profile_actor(model, tcfg, device, size, args.actor_iters, args.threads)

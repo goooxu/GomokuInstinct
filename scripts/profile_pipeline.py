@@ -138,6 +138,43 @@ def profile_labels(rules, size: int, count: int) -> None:
         )
 
 
+def fill_synthetic(buffer, size: int, count: int, threat_levels: int) -> None:
+    """用随机样本填满回放池，供 trainer 侧剖析。
+
+    只在 replay 目录里还没有分片时用（比如一轮训练刚开始 —— 样本要等对局**结束**
+    才产生，头十几分钟一条都没有）。trainer 每一步的耗时只取决于张量形状与 dtype，
+    与数据内容无关，所以合成数据测出来的时间是有效的；不有效的是 loss 数值本身，
+    而这里根本不看 loss。
+    """
+    rng = np.random.default_rng(0)
+    n = size * size
+
+    boards = np.zeros((count, n), np.uint8)
+    for i in range(count):
+        cells = rng.choice(n, size=int(rng.integers(10, 60)), replace=False)
+        for j, c in enumerate(cells):
+            boards[i, c] = 1 + (j % 2)
+
+    policy = rng.random((count, n)).astype(np.float32)
+    policy /= policy.sum(axis=1, keepdims=True)
+
+    buffer.add({
+        "boards": boards,
+        "policy": policy.astype(np.float16),
+        "to_move": rng.integers(1, 3, count, dtype=np.uint8),
+        "history": rng.integers(-1, n, (count, 4)).astype(np.int32),
+        "move_number": rng.integers(0, n, count).astype(np.int32),
+        "value": rng.choice([-1.0, 0.0, 1.0], count).astype(np.float32),
+        "plies_remaining": rng.integers(0, 60, count).astype(np.int32),
+        "next_move": rng.integers(0, n, count).astype(np.int32),
+        "root_value": rng.uniform(-1, 1, count).astype(np.float32),
+        "blunder_gap": rng.uniform(0, 0.5, count).astype(np.float32),
+        "threat_self": rng.integers(0, threat_levels, (count, n)).astype(np.uint8),
+        "threat_opp": rng.integers(0, threat_levels, (count, n)).astype(np.uint8),
+        "forbidden": (rng.random((count, n)) < 0.02).astype(np.uint8),
+    })
+
+
 def profile_trainer(model, cfg, model_cfg, device, size, buffer, iters: int) -> None:
     timer = Timer()
     optimizer = build_optimizer(model, {"train": {"optim": {"lr": 1e-4}}})
@@ -210,8 +247,15 @@ def main() -> int:
     loaded = buffer.restore_from_shards()
     print(f"  装入 {loaded:,} 条")
     if loaded == 0:
-        print("  没有样本，跳过 trainer 剖析")
-        return 0
+        # 一轮训练刚开始时这里必然是 0：样本要等对局**结束**才产生，
+        # 2048 局并行、每局几十手，头十几分钟一条都没有。
+        # 退回合成样本，别让工具在最需要它的时候什么都不给。
+        print(f"  没有分片，改用 {args.buffer_samples:,} 条合成样本"
+              "（步骤耗时只取决于张量形状，与数据内容无关）")
+        # 关键：先摘掉 shard_dir，否则合成数据会被当成真样本写进 replay 目录，
+        # 污染正在跑的那轮训练。
+        buffer.shard_dir = None
+        fill_synthetic(buffer, size, args.buffer_samples, model_cfg.threat_levels)
 
     train_model = InstinctNet(model_cfg).to(device).to(torch.bfloat16)
     train_model.load_state_dict(model.state_dict())

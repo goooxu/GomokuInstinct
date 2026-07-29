@@ -330,6 +330,9 @@ class Trainer:
 
     @staticmethod
     def _log(path: str, metrics: dict) -> None:
+        # 每条记录都带上墙钟时间。上一轮训练没记，结果「训练到底跑了多久」只能靠
+        # 样本分片的 mtime 反推 —— 分片一清理，这个信息就永久没了。
+        metrics.setdefault("wall_time", time.time())
         with open(path, "a") as fh:
             fh.write(json.dumps(metrics, ensure_ascii=False) + "\n")
 

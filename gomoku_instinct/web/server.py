@@ -268,6 +268,14 @@ class App:
             "forbidden": forbidden,
             "analysis": analysis,
             "step": self.meta["step"],
+            # 当前是哪个模型，和它的 step 一起发出去。页面据此渲染下拉框，
+            # 于是"显示的"和"真正在下棋的"来自同一份数据，不可能对不上。
+            # 激活模型是**服务端全局状态**（不分会话），另一个标签页换了模型，
+            # 这边下一次拿状态就会看到，不会各说各话。
+            "model": {
+                "id": self.active,
+                "name": self.sources[self.active]["name"] if self.sources else "",
+            },
             "history": [
                 {
                     "move": m,

@@ -197,23 +197,28 @@ const newGame = () => startGame($("color").value);
 // ── 模型切换 ────────────────────────────────────────────────────────────────
 let MODELS = [];
 
-const modelLabel = (m) =>
-  m.name +
-  (m.step === null || m.step === undefined ? "" : "　step " + m.step.toLocaleString()) +
-  (m.live ? "　⟳" : "");   // ⟳ 表示这个 run 还在训练，会随 checkpoint 更新
+const modelLabel = (name, step, live) =>
+  name +
+  (step === null || step === undefined ? "" : "　step " + step.toLocaleString()) +
+  (live ? "　⟳" : "");   // ⟳ 表示这个 run 是目录，会随 checkpoint 更新
 
 function renderModels() {
   const row = $("modelRow"), sel = $("model");
   if (MODELS.length < 2) { row.style.display = "none"; return; }
   row.style.display = "flex";
-  // 选中那个的 step 以对局状态为准：热加载后它自己会往上走，
-  // 不必为此再向服务端多要一次列表。
-  const active = MODELS.find((m) => m.active);
-  if (active && S) active.step = S.step;
+  // 「哪个在用」和「练到哪一步」都取自同一份对局状态 S，两者不可能对不上。
+  //
+  // 这里**绝不能**把 S.step 写回 MODELS。激活模型是服务端全局状态，
+  // MODELS 是另一次请求的快照，两边短暂不同步是常态；一旦写回去就留下永久脏值 ——
+  // 实测表现是 renju15b 顶着 renju15 的 step 30,012 显示，而且再也不会自己恢复。
+  // 这正是 #11 号静默失败（render() 抹掉用户刚选的颜色）的同一个模式：
+  // **render 只许读、不许写。**
+  const activeId = S && S.model ? S.model.id : -1;
   // 用 new Option 而不是拼 innerHTML —— 名字来自命令行给的路径，不该被当 HTML 解析。
   sel.replaceChildren(...MODELS.map((m) => {
-    const o = new Option(modelLabel(m), String(m.id));
-    o.selected = !!m.active;
+    const step = (m.id === activeId && S) ? S.step : m.step;
+    const o = new Option(modelLabel(m.name, step, m.live), String(m.id));
+    o.selected = m.id === activeId;
     return o;
   }));
 }
@@ -587,8 +592,13 @@ $("model").onchange = () => {
   // 换模型**不重开对局** —— 摆着同一个局面换个对手来走，正是对比强弱最直接的用法。
   guard(async () => {
     MODELS = (await api("/api/model", { id })).models || MODELS;
-    return await fetch("/api/state?sid=" + encodeURIComponent(S.sid))
+    const st = await fetch("/api/state?sid=" + encodeURIComponent(S.sid))
       .then((r) => r.json());
+    // 会话可能已经没了（服务重启过）。这条是裸 fetch，走不到 api() 里的 410 恢复，
+    // 直接把一个没有 step 的错误对象当状态用，render() 会在 S.step.toLocaleString()
+    // 上抛出去，整页停在旧内容上不动。
+    if (st && typeof st.step === "number") return st;
+    return await api("/api/new", { color: $("color").value });
   });
 };
 $("undo").onclick = () => guard(() => api("/api/undo", { sid: S.sid }));

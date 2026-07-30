@@ -606,3 +606,36 @@ def test_switch_model_rejects_bad_index():
     app.sources = [{"name": "a", "path": "A"}]
     with pytest.raises(IndexError):
         app.switch_model(5)
+
+
+def test_render_models_never_mutates_the_model_list():
+    """renderModels() 不能往 MODELS 里写。
+
+    「哪个模型在用」是服务端全局状态，MODELS 只是某一次请求的快照，
+    两边短暂不同步是常态。render 里只要有一句写回去，就会留下**永久**脏值 ——
+    实测表现是 renju15b 顶着 renju15 的 step 30,012 显示，刷新都不一定好。
+    这和 #11 号（render() 抹掉用户刚选的颜色）是同一个模式：render 只许读、不许写。
+    """
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function renderModels()"))
+    # 只认「赋值给 MODELS 本身 / 它的下标 / 它的元素字段」，
+    # 不能把同一行后面无关的 `=` 也算进来
+    offenders = re.findall(r"\bMODELS\s*(?:\[[^\]]*\])?\s*=(?!=)", body)
+    offenders += re.findall(r"\bMODELS\.\w+\s*=(?!=)", body)
+    offenders += re.findall(r"\b(?:m|active|entry)\.(?:step|active|name|live|id)\s*=(?!=)",
+                            body)
+    assert not offenders, f"renderModels() 写了模型列表: {offenders}"
+
+
+def test_state_carries_the_active_model(server):
+    """状态里必须带上「当前是哪个模型」。
+
+    页面的下拉框和顶部的 step 都从这一份数据渲染，不可能各说各话。
+    """
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
+    app.active = 1
+    status, state = post(base, "/api/new", {"color": "black"})
+    assert status == 200
+    assert state["model"] == {"id": 1, "name": "b"}

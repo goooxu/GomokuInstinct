@@ -60,12 +60,16 @@ class Session:
     混在一起，正负号的含义正好相反，界面上没法解释。
     """
 
-    def __init__(self, size: int, rules: RenjuRules, human: int) -> None:
+    def __init__(self, size: int, rules: RenjuRules, human: int,
+                 model: int = 0) -> None:
         self.game = Game(size, rules, ForbiddenSemantics.LOSE)
         self.human = human
         self.analysis = None
         self.analysis_color = None
         self.resigned: int | None = None
+        # 用哪个模型是**每局各自的事**，不是服务端全局的。开两个标签页就能让
+        # 两个模型同时各下各的；也不会出现一个页面换了模型、另一个页面跟着变。
+        self.model = model
 
 
 class App:
@@ -78,14 +82,19 @@ class App:
         size: int,
         sources: list[dict] | None = None,
         device: str = "cpu",
+        safe_mode: bool = False,
+        temperature: float = 0.0,
     ) -> None:
-        self.player = player
-        self.meta = meta
         self.size = size
         # 可在页面上切换的模型。每项 {"name": 显示名, "path": --ckpt 给的原始路径}
-        self.sources = list(sources or [])
-        self.active = 0
+        self.sources = list(sources or [{"name": "model", "path": None}])
         self.device = device
+        self.safe_mode = safe_mode
+        self.temperature = temperature
+        # 按需载入的模型池。0 号是启动时就载好的那个，其余等真有人选到才载 ——
+        # 挂着五个 run 却只玩其中一个时，不该为另外四个白占显存和启动时间。
+        self._players: dict[int, InstinctPlayer] = {0: player}
+        self._metas: dict[int, dict] = {0: meta}
         self.rules = RenjuRules()
         self.lock = threading.Lock()
         self.sessions: OrderedDict[str, Session] = OrderedDict()
@@ -97,55 +106,95 @@ class App:
         # 固定一条预热过的线程之后回到 11ms。
         self._infer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gi-infer")
 
-    def analyze(self, game: Game):
-        return self._infer.submit(self.player.analyze, game).result()
+    # 0 号模型。保留这两个名字是因为它们在很多地方读起来更自然，
+    # 语义就是"默认那个"，不再有"全局当前选中"的含义。
+    @property
+    def player(self) -> InstinctPlayer:
+        return self._players[0]
+
+    @property
+    def meta(self) -> dict:
+        return self._metas[0]
+
+    @meta.setter
+    def meta(self, value: dict) -> None:
+        self._metas[0] = value
+
+    def ensure_loaded(self, index: int) -> InstinctPlayer:
+        """按需把第 index 个模型载进来。**只能在推理线程上调用。**
+
+        载入要占 GPU，和正在进行的前向撞在一起会互相拖慢；
+        推理本来就串行在一条线程上，把载入也排进去最省事。
+        """
+        player = self._players.get(index)
+        if player is not None:
+            return player
+        source = self.sources[index]
+        model, meta = load_model(source["path"], self.device)
+        if meta["board_size"] != self.size:
+            raise RuntimeError(
+                f"{source['name']} 是 {meta['board_size']}x{meta['board_size']} 的模型，"
+                f"当前服务开在 {self.size}x{self.size}，用不了"
+            )
+        player = InstinctPlayer(model, self.size, self.device,
+                                safe_mode=self.safe_mode,
+                                temperature=self.temperature)
+        self._players[index] = player
+        self._metas[index] = meta
+        print(f"[serve] 载入 {source['name']}   step {meta['step']:,}", flush=True)
+        return player
+
+    def _analyze_on_thread(self, game: Game, index: int):
+        return self.ensure_loaded(index).analyze(game)
+
+    def analyze(self, game: Game, index: int = 0):
+        return self._infer.submit(self._analyze_on_thread, game, index).result()
+
+    def meta_for(self, index: int) -> dict:
+        return self._metas.get(index, self._metas[0])
 
     def warmup(self) -> None:
         """先在推理线程上跑一次空盘，把句柄建好，免得第一手卡一下。"""
         self.analyze(Game(self.size, self.rules, ForbiddenSemantics.LOSE))
 
     # ── 热加载 ──────────────────────────────────────────────────────────────
-    def _reload_once(self, source: str) -> None:
-        """把 run 目录里最新的权重换进来。只在推理线程上跑。"""
+    def _reload_once(self, index: int) -> None:
+        """把某个 run 目录里最新的权重换进来。只在推理线程上跑。"""
+        source = self.sources[index]["path"]
         path = resolve_checkpoint(source)
-        if path == self.meta.get("path"):
+        meta = self._metas[index]
+        if path == meta.get("path"):
             return
         state = torch.load(path, map_location="cpu", weights_only=False)
         # 只换权重、不换结构。结构真的变了 load_state_dict 会抛，
         # 由外层记下来并保留旧权重继续服务 —— 好过悄悄换上一个对不上的网络。
-        self.player.model.load_state_dict(state["model"])
-        # 整个 dict 一次性换掉：state() 读 meta 时没有加锁，重新绑定属性是原子的，
+        self._players[index].model.load_state_dict(state["model"])
+        # 整个 dict 一次性换掉：state() 读 meta 时没有加锁，重新绑定是原子的，
         # 逐个字段改则可能被读到一半新一半旧。
-        self.meta = dict(
-            self.meta,
-            path=path,
-            step=state.get("step", 0),
-            cycle=state.get("cycle", 0),
+        self._metas[index] = dict(
+            meta, path=path, step=state.get("step", 0), cycle=state.get("cycle", 0)
         )
-        print(f"[serve] 热加载 step {self.meta['step']:,}"
+        print(f"[serve] {self.sources[index]['name']} 热加载 "
+              f"step {self._metas[index]['step']:,}"
               f"（{os.path.basename(path)}）", flush=True)
 
-    def active_source(self) -> str | None:
-        if not self.sources:
-            return None
-        return self.sources[self.active]["path"]
+    def followable(self) -> list[int]:
+        """哪些模型要跟着训练更新。
 
-    def should_follow(self) -> bool:
-        """当前选中的这个源要不要跟着训练更新。
-
-        只有 run 目录才跟；直接指到某个 .pt 文件是"我就要这一版"的意思。
+        只跟**已经载入**的：没人选到的模型没必要为它读盘。
+        也只跟 run 目录；直接指到某个 .pt 是"我就要这一版"的意思。
         """
-        source = self.active_source()
-        return source is not None and os.path.isdir(source)
+        return [
+            i for i in sorted(self._players)
+            if i < len(self.sources)
+            and self.sources[i]["path"]
+            and os.path.isdir(self.sources[i]["path"])
+        ]
 
     def start_watching(self, interval: float) -> None:
-        """盯着当前选中的 run 目录，训练每落一个新 checkpoint 就换上。
+        """盯着已载入的 run 目录，训练每落一个新 checkpoint 就换上。
 
-        只对 run 目录生效；直接指到某个 .pt 文件时不监视（那是"我就要这一版"的意思）。
         重新载入必须**排到推理线程上**执行，否则会和正在进行的一次前向抢同一个模型。
-
-        每一轮都重新取一次当前选中的源 —— 页面上换了模型之后，
-        该跟的是新选的那个，而不是启动时那个。
         """
         if interval <= 0:
             return
@@ -153,61 +202,46 @@ class App:
         def loop() -> None:
             while True:
                 time.sleep(interval)
-                if not self.should_follow():
-                    continue
-                source = self.active_source()
-                try:
-                    self._infer.submit(self._reload_once, source).result()
-                except Exception as exc:  # 换不上就继续用旧的，别把服务弄挂
-                    print(f"[serve] 热加载失败（下轮重试）：{exc}", flush=True)
+                for index in self.followable():
+                    try:
+                        self._infer.submit(self._reload_once, index).result()
+                    except Exception as exc:  # 换不上就继续用旧的，别把服务弄挂
+                        print(f"[serve] 热加载失败（下轮重试）：{exc}", flush=True)
 
         threading.Thread(target=loop, daemon=True, name="gi-reload").start()
 
-    # ── 切换模型 ────────────────────────────────────────────────────────────
-    def _switch_once(self, index: int) -> None:
-        """整个模型换掉。只在推理线程上跑。
-
-        这里用 load_model 重新建一个网络，而不是像热加载那样 load_state_dict ——
-        不同的 run 可能是不同的结构（层数、通道数都记在各自的 checkpoint 里），
-        往现有网络里灌权重会直接对不上。
-        """
-        src = self.sources[index]
-        model, meta = load_model(src["path"], self.device)
-        if meta["board_size"] != self.size:
-            raise RuntimeError(
-                f"{src['name']} 是 {meta['board_size']}x{meta['board_size']} 的模型，"
-                f"当前服务开在 {self.size}x{self.size}，中途换不了"
-            )
-        self.player.model = model
-        self.active = index
-        self.meta = meta
-        print(f"[serve] 切到 {src['name']}   step {meta['step']:,}", flush=True)
-
-    def switch_model(self, index: int) -> None:
+    # ── 模型 ────────────────────────────────────────────────────────────────
+    def use_model(self, session: Session, index: int) -> None:
+        """给某一局换模型。**只影响这一局**，别的对局照旧。"""
         if not 0 <= index < len(self.sources):
             raise IndexError("没有这个模型")
-        self._infer.submit(self._switch_once, index).result()
+        self._infer.submit(self.ensure_loaded, index).result()
+        session.model = index
 
     def model_list(self) -> list[dict]:
+        """可选模型清单。**不含"哪个在用"** —— 那是每局各自的事，
+        随对局状态一起发，免得两处各说各话（见 #11 那类回写 bug）。
+        """
         out = []
         for i, src in enumerate(self.sources):
-            live = os.path.isdir(src["path"])
-            step = self.meta.get("step") if i == self.active else _peek_step(src["path"])
+            path = src["path"]
+            loaded = self._metas.get(i)
             out.append({
                 "id": i,
                 "name": src["name"],
-                "step": step,
-                "active": i == self.active,
+                "step": (loaded or {}).get("step") if loaded else _peek_step(path),
                 # run 目录会随训练更新；直接指到 .pt 的是固定快照
-                "live": live,
+                "live": bool(path) and os.path.isdir(path),
             })
         return out
 
-    def new_session(self, human: int) -> tuple[str, Session]:
+    def new_session(self, human: int, model: int = 0) -> tuple[str, Session]:
+        if not 0 <= model < len(self.sources):
+            raise IndexError("没有这个模型")
         while len(self.sessions) >= MAX_SESSIONS:
             self.sessions.popitem(last=False)
         sid = secrets.token_urlsafe(12)
-        session = Session(self.size, self.rules, human)
+        session = Session(self.size, self.rules, human, model)
         self.sessions[sid] = session
         return sid, session
 
@@ -222,7 +256,7 @@ class App:
         game = session.game
         if game.is_terminal() or session.resigned is not None:
             return
-        analysis = self.analyze(game)
+        analysis = self.analyze(game, session.model)
         session.analysis_color = game.to_move
         session.analysis = analysis
         game.play(analysis.move)
@@ -267,14 +301,12 @@ class App:
             "resigned": session.resigned,
             "forbidden": forbidden,
             "analysis": analysis,
-            "step": self.meta["step"],
-            # 当前是哪个模型，和它的 step 一起发出去。页面据此渲染下拉框，
-            # 于是"显示的"和"真正在下棋的"来自同一份数据，不可能对不上。
-            # 激活模型是**服务端全局状态**（不分会话），另一个标签页换了模型，
-            # 这边下一次拿状态就会看到，不会各说各话。
+            # 这一局用的是哪个模型、它练到哪一步 —— 两者出自同一份数据，
+            # 页面据此渲染下拉框，"显示的"和"真正在下棋的"不可能对不上。
+            "step": self.meta_for(session.model).get("step", 0),
             "model": {
-                "id": self.active,
-                "name": self.sources[self.active]["name"] if self.sources else "",
+                "id": session.model,
+                "name": self.sources[session.model]["name"],
             },
             "history": [
                 {
@@ -395,26 +427,38 @@ class Handler(BaseHTTPRequestHandler):
     # ── 接口 ────────────────────────────────────────────────────────────
     def _api_new(self, payload: dict) -> None:
         human = WHITE if str(payload.get("color", "black")).startswith("w") else BLACK
-        sid, session = self.app.new_session(human)
+        model = payload.get("model", 0)
+        if not isinstance(model, int):
+            self._json({"error": "model 必须是整数"}, 400)
+            return
+        try:
+            sid, session = self.app.new_session(human, model)
+        except IndexError:
+            self._json({"error": "没有这个模型"}, 404)
+            return
         if human == WHITE:
             self.app.ai_move(session)  # AI 执黑先行
         self._json(self.app.state(sid, session))
 
     def _api_model(self, payload: dict) -> None:
+        """给**这一局**换模型。别的对局不受影响。"""
+        session = self._session(payload)
+        if session is None:
+            return
         index = payload.get("id")
         if not isinstance(index, int):
             self._json({"error": "id 必须是整数"}, 400)
             return
         try:
-            self.app.switch_model(index)
+            self.app.use_model(session, index)
         except IndexError:
             self._json({"error": "没有这个模型"}, 404)
             return
         except Exception as exc:
             # 换不上就继续用原来那个，把原因告诉页面而不是静默失败
-            self._json({"error": f"切换失败：{exc}"}, 409)
+            self._json({"error": f"换不了：{exc}"}, 409)
             return
-        self._json({"models": self.app.model_list()})
+        self._json(self.app.state(payload["sid"], session))
 
     def _api_move(self, payload: dict) -> None:
         session = self._session(payload)
@@ -513,7 +557,8 @@ def build_app(
         model, size, device, safe_mode=safe_mode, temperature=temperature
     )
     return App(player, meta, size,
-               sources=[_source_entry(p) for p in paths], device=device)
+               sources=[_source_entry(p) for p in paths], device=device,
+               safe_mode=safe_mode, temperature=temperature)
 
 
 def serve(
@@ -533,8 +578,9 @@ def serve(
     print(f"权重 step {app.meta['step']:,}   棋盘 {app.size}x{app.size}   设备 {device}")
     print("AI 落子完全由一次网络前向决定，不使用任何搜索。")
     if len(app.sources) > 1:
-        print("可切换的模型：" + "、".join(s["name"] for s in app.sources))
-    if reload_seconds > 0 and os.path.isdir(app.active_source() or ""):
+        print("可选模型：" + "、".join(s["name"] for s in app.sources)
+              + "　（每局各自选，开多个标签页就能同时玩多局）")
+    if reload_seconds > 0 and app.followable():
         print(f"每 {reload_seconds:.0f} 秒检查一次新 checkpoint，"
               "页面顶部的 step 会跟着变。")
     else:

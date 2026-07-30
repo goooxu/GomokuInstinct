@@ -125,6 +125,8 @@
     </div>
 
     <div class="tip">
+      模型是<b>每局各自选</b>的：新开一个标签页就是新的一局，
+      两局可以用不同的模型同时下。刷新不会丢棋。<br>
       鼠标悬停会在落点上显示半透明的棋子、四边坐标同步高亮，确认后再点。<br>
       方向键也能移动落点，回车落子。<br>
       AI 落子后，那颗子上写着模型给这一手的概率，蓝圈是它同时在考虑的
@@ -161,7 +163,7 @@ async function api(path, body) {
     const fresh = await fetch("/api/new", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ color: $("color").value }),
+      body: JSON.stringify({ color: $("color").value, model: selectedModel() }),
     }).then((r) => r.json());
     $("msg").textContent = "上一局已失效（服务重启过），已为你开新局。";
     return fresh;
@@ -173,6 +175,10 @@ async function api(path, body) {
 function setState(next) {
   S = next;
   viewPly = null;
+  // sessionStorage 是**按标签页**隔离的：每个标签页记住自己那一局，
+  // 刷新不会把棋丢掉，而新开一个标签页就是新的一局。
+  // 用 localStorage 就错了 —— 所有标签页会共用同一个 sid，变成同一局。
+  if (S && S.sid) sessionStorage.setItem("gi_sid", S.sid);
   render();
 }
 
@@ -191,7 +197,14 @@ async function guard(fn) {
   }
 }
 
-const startGame = (color) => guard(() => api("/api/new", { color }));
+// 下拉框还没填好时按 0 号来，别把 NaN 发出去
+const selectedModel = () => {
+  const v = $("model").value;
+  return v === "" || v === null ? 0 : Number(v);
+};
+
+const startGame = (color) =>
+  guard(() => api("/api/new", { color, model: selectedModel() }));
 const newGame = () => startGame($("color").value);
 
 // ── 模型切换 ────────────────────────────────────────────────────────────────
@@ -590,16 +603,9 @@ $("color").onchange = () => {
 $("model").onchange = () => {
   const id = Number($("model").value);
   // 换模型**不重开对局** —— 摆着同一个局面换个对手来走，正是对比强弱最直接的用法。
-  guard(async () => {
-    MODELS = (await api("/api/model", { id })).models || MODELS;
-    const st = await fetch("/api/state?sid=" + encodeURIComponent(S.sid))
-      .then((r) => r.json());
-    // 会话可能已经没了（服务重启过）。这条是裸 fetch，走不到 api() 里的 410 恢复，
-    // 直接把一个没有 step 的错误对象当状态用，render() 会在 S.step.toLocaleString()
-    // 上抛出去，整页停在旧内容上不动。
-    if (st && typeof st.step === "number") return st;
-    return await api("/api/new", { color: $("color").value });
-  });
+  // 换模型**只影响这一局**，别的标签页照旧；也不重开对局 ——
+  // 摆着同一个局面换个对手接着走，正是对比强弱最直接的用法。
+  guard(() => api("/api/model", { sid: S.sid, id }));
 };
 $("undo").onclick = () => guard(() => api("/api/undo", { sid: S.sid }));
 $("hint").onclick = () => guard(() => api("/api/hint", { sid: S.sid }));
@@ -615,7 +621,20 @@ $("moves").onclick = (ev) => {
 };
 window.addEventListener("resize", resize);
 
-newGame().then(() => { resize(); loadModels(); });
+// 刷新时先试着接回本标签页原来那一局，接不上再开新的。
+async function boot() {
+  const saved = sessionStorage.getItem("gi_sid");
+  if (saved) {
+    try {
+      const st = await fetch("/api/state?sid=" + encodeURIComponent(saved))
+        .then((r) => r.json());
+      if (st && typeof st.step === "number") { setState(st); return; }
+    } catch (err) { /* 接不回来就当新局开 */ }
+  }
+  await newGame();
+}
+
+boot().then(() => { resize(); loadModels(); });
 </script>
 </body>
 </html>

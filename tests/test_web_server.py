@@ -459,10 +459,11 @@ class _StubModel:
         self.loaded.append(state)
 
 
-def _make_app_with_model(model):
+def _make_app_with_model(model, path=None, name="run"):
     player = _StubPlayer()
     player.model = model
-    return App(player, {"step": 0, "path": None}, SIZE)
+    return App(player, {"step": 0, "path": None}, SIZE,
+               sources=[{"name": name, "path": path}])
 
 
 def _write_ckpt(run_dir, step: int) -> str:
@@ -479,64 +480,67 @@ def _write_ckpt(run_dir, step: int) -> str:
 
 def test_reload_picks_up_new_checkpoint(tmp_path):
     model = _StubModel()
-    app = _make_app_with_model(model)
+    app = _make_app_with_model(model, str(tmp_path))
 
     _write_ckpt(tmp_path, 100)
-    app._reload_once(str(tmp_path))
+    app._reload_once(0)
     assert app.meta["step"] == 100
     assert model.loaded == [{"w": 100}]
 
     _write_ckpt(tmp_path, 250)
-    app._reload_once(str(tmp_path))
+    app._reload_once(0)
     assert app.meta["step"] == 250
     assert len(model.loaded) == 2
 
 
 def test_reload_is_noop_when_latest_unchanged(tmp_path):
     model = _StubModel()
-    app = _make_app_with_model(model)
+    app = _make_app_with_model(model, str(tmp_path))
 
     _write_ckpt(tmp_path, 100)
-    app._reload_once(str(tmp_path))
-    app._reload_once(str(tmp_path))
+    app._reload_once(0)
+    app._reload_once(0)
     # 每 N 秒查一次，绝大多数时候没有新权重；不能每次都把 53MB 重读一遍
     assert len(model.loaded) == 1
 
 
 def test_reload_failure_keeps_old_weights(tmp_path):
     model = _StubModel(fail=True)
-    app = _make_app_with_model(model)
+    app = _make_app_with_model(model, str(tmp_path))
     app.meta = {"step": 7, "path": "旧的"}
 
     _write_ckpt(tmp_path, 100)
     with pytest.raises(RuntimeError):
-        app._reload_once(str(tmp_path))
+        app._reload_once(0)
 
     # 关键：load 抛了以后 meta 不能被改动，否则页面会显示一个并没有装上的 step
     assert app.meta == {"step": 7, "path": "旧的"}
 
 
 def test_watching_disabled_when_interval_is_zero(tmp_path):
-    app = _make_app_with_model(_StubModel())
-    app.sources = [{"name": "r", "path": str(tmp_path)}]
+    app = _make_app_with_model(_StubModel(), str(tmp_path))
     before = threading.active_count()
     app.start_watching(0.0)
     assert threading.active_count() == before
 
 
-def test_only_run_dirs_are_followed(tmp_path):
-    """指到具体某个 .pt 时不跟 —— 那是「我就要这一版」的意思。"""
-    app = _make_app_with_model(_StubModel())
+def test_only_loaded_run_dirs_are_followed(tmp_path):
+    """只跟已载入的 run 目录。
+
+    指到具体某个 .pt 的不跟（那是「我就要这一版」的意思）；
+    还没有人选到、根本没载入的也不跟，没必要为它反复读盘。
+    """
     name = _write_ckpt(tmp_path, 100)
+    pinned = str(tmp_path / "checkpoints" / name)
 
-    app.sources = [{"name": "run", "path": str(tmp_path)}]
-    assert app.should_follow() is True
+    app = _make_app_with_model(_StubModel(), str(tmp_path))
+    app.sources.append({"name": "pin", "path": pinned})
+    app.sources.append({"name": "没载入", "path": str(tmp_path)})
+    # 只有 0 号载入过（构造时就给了），另外两个都没有
+    assert app.followable() == [0]
 
-    app.sources = [{"name": "pin", "path": str(tmp_path / "checkpoints" / name)}]
-    assert app.should_follow() is False
-
-    app.sources = []
-    assert app.should_follow() is False
+    app = _make_app_with_model(_StubModel(), pinned)
+    assert app.followable() == []
 
 
 # ── 页面上切换模型 ──────────────────────────────────────────────────────────
@@ -551,61 +555,85 @@ def test_peek_step_reads_from_filename(tmp_path):
     assert server_mod._peek_step(str(tmp_path / "不存在")) is None
 
 
-def test_model_list_marks_active_and_live(tmp_path):
-    app = _make_app_with_model(_StubModel())
+def test_model_list_has_no_active_flag(tmp_path):
+    """清单里**不含**「哪个在用」—— 那是每局各自的事，随对局状态一起发。
+
+    两处各自维护同一件事，就会有一处过期；#11 号那类 bug 全是这么来的。
+    """
+    app = _make_app_with_model(_StubModel(), str(tmp_path), name="训练中")
     _write_ckpt(tmp_path, 900)
     pinned = str(tmp_path / "checkpoints" / "step_000000900.pt")
-    app.sources = [{"name": "训练中", "path": str(tmp_path)},
-                   {"name": "固定版", "path": pinned}]
+    app.sources.append({"name": "固定版", "path": pinned})
     app.meta = {"step": 950, "path": "x"}
 
     items = app.model_list()
-    assert [m["active"] for m in items] == [True, False]
+    assert all("active" not in m for m in items)
     assert [m["live"] for m in items] == [True, False]
-    # 选中的那个以当前 meta 为准（热加载后会比文件名新），未选中的才去看文件名
+    # 已载入的用它自己的 meta（热加载后会比文件名新），没载入的才去看文件名
     assert items[0]["step"] == 950
     assert items[1]["step"] == 900
 
 
-def test_switch_model_swaps_model_and_meta(tmp_path, monkeypatch):
+def _two_model_app(monkeypatch, board_size=SIZE, step=77):
     from gomoku_instinct.web import server as server_mod
 
-    app = _make_app_with_model(_StubModel())
-    app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
+    app = _make_app_with_model(_StubModel(), None, name="a")
+    app.sources.append({"name": "b", "path": "B"})
     sentinel = object()
     monkeypatch.setattr(
         server_mod, "load_model",
-        lambda path, device: (sentinel, {"step": 77, "board_size": SIZE, "path": path}),
+        lambda path, device: (sentinel,
+                              {"step": step, "board_size": board_size, "path": path}),
     )
-
-    app.switch_model(1)
-    assert app.active == 1
-    assert app.meta["step"] == 77
-    # 换 run 要整个换网络，不是往旧网络里灌权重 —— 不同 run 的结构可能不一样
-    assert app.player.model is sentinel
+    monkeypatch.setattr(server_mod, "InstinctPlayer",
+                        lambda model, *a, **k: _StubPlayer())
+    return app, sentinel
 
 
-def test_switch_model_rejects_other_board_size(tmp_path, monkeypatch):
-    from gomoku_instinct.web import server as server_mod
+def test_each_session_keeps_its_own_model(monkeypatch):
+    """换模型只动这一局。另一局该用哪个还用哪个。"""
+    app, _ = _two_model_app(monkeypatch)
+    _, one = app.new_session(BLACK)
+    _, two = app.new_session(BLACK)
 
-    app = _make_app_with_model(_StubModel())
-    app.sources = [{"name": "a", "path": "A"}, {"name": "小棋盘", "path": "B"}]
-    monkeypatch.setattr(
-        server_mod, "load_model",
-        lambda path, device: (object(), {"step": 1, "board_size": 9, "path": path}),
-    )
-
-    with pytest.raises(RuntimeError):
-        app.switch_model(1)
-    # 换不上就必须保持原样，否则页面显示的和真正在下棋的不是同一个模型
-    assert app.active == 0
+    app.use_model(one, 1)
+    assert one.model == 1
+    assert two.model == 0          # 另一局完全不受影响
 
 
-def test_switch_model_rejects_bad_index():
-    app = _make_app_with_model(_StubModel())
-    app.sources = [{"name": "a", "path": "A"}]
+def test_new_session_can_pick_a_model(monkeypatch):
+    app, _ = _two_model_app(monkeypatch)
+    _, session = app.new_session(BLACK, 1)
+    assert session.model == 1
     with pytest.raises(IndexError):
-        app.switch_model(5)
+        app.new_session(BLACK, 9)
+
+
+def test_models_are_loaded_lazily(monkeypatch):
+    """没人选到的模型不该被载入 —— 挂五个 run 只玩一个时不该白占显存。"""
+    app, sentinel = _two_model_app(monkeypatch)
+    assert sorted(app._players) == [0]
+
+    _, session = app.new_session(BLACK)
+    app.use_model(session, 1)
+    assert sorted(app._players) == [0, 1]
+    assert app.meta_for(1)["step"] == 77
+
+
+def test_use_model_rejects_other_board_size(monkeypatch):
+    app, _ = _two_model_app(monkeypatch, board_size=9)
+    _, session = app.new_session(BLACK)
+    with pytest.raises(RuntimeError):
+        app.use_model(session, 1)
+    # 换不上就保持原样，否则页面显示的和真正在下棋的不是同一个模型
+    assert session.model == 0
+
+
+def test_use_model_rejects_bad_index(monkeypatch):
+    app, _ = _two_model_app(monkeypatch)
+    _, session = app.new_session(BLACK)
+    with pytest.raises(IndexError):
+        app.use_model(session, 5)
 
 
 def test_render_models_never_mutates_the_model_list():
@@ -635,7 +663,6 @@ def test_state_carries_the_active_model(server):
     """
     base, app = server
     app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
-    app.active = 1
     status, state = post(base, "/api/new", {"color": "black"})
     assert status == 200
-    assert state["model"] == {"id": 1, "name": "b"}
+    assert state["model"] == {"id": 0, "name": "a"}

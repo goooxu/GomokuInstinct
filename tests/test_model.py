@@ -236,11 +236,11 @@ def test_all_parameters_receive_gradients(small_net):
     assert not missing, f"这些参数没有梯度: {missing}"
 
 
-def test_masked_policy_blocks_occupied_points(small_net):
+def test_masked_logits_blocks_occupied_points(small_net):
     logits = torch.zeros(1, 9)
     legal = torch.ones(1, 9, dtype=torch.bool)
     legal[0, 4] = False
-    masked = InstinctNet.masked_policy(logits, legal)
+    masked = InstinctNet.masked_logits(logits, legal)
     assert masked[0, 4] == float("-inf")
     assert masked.softmax(-1)[0, 4] == 0.0
 

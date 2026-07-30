@@ -166,7 +166,7 @@ value  = value_head(gelu(pool_proj(pooled)))       # (B, 3)
 | `gomoku_instinct/model/net.py` | `InstinctNet` | 网络主体 |
 | `gomoku_instinct/model/net.py` | `ModelConfig` | 全部超参与默认值 |
 | `gomoku_instinct/model/net.py` | `value_scalar` | 三分类 → `P(胜)−P(负)` |
-| `gomoku_instinct/model/net.py` | `masked_policy` | 屏蔽非法点；注释写明**不**屏蔽禁手点 |
+| `gomoku_instinct/model/net.py` | `masked_logits` | 屏蔽非法点；注释写明**不**屏蔽禁手点 |
 | `gomoku_instinct/model/blocks.py` | `LineConv` | gutter + 四种 dilation 的直线卷积 |
 | `gomoku_instinct/model/blocks.py` | `DirectionalLineBlock` | 主干残差块 |
 | `gomoku_instinct/model/blocks.py` | `GlobalAttention` | 全盘自注意力（含 contiguous 那条注释） |

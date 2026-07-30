@@ -86,7 +86,7 @@ class InstinctPlayer:
                 legal = legal & ~fb
                 masked_forbidden = True
 
-        logits = out.policy.float().masked_fill(~legal, float("-inf"))
+        logits = InstinctNet.masked_logits(out.policy, legal)
         probs = torch.softmax(logits, dim=-1)[0]
 
         if self.temperature > 1e-6:
@@ -157,5 +157,5 @@ class InstinctPlayer:
             has_any = keep.any(dim=-1, keepdim=True)
             legal = torch.where(has_any, keep, legal)
 
-        logits = out.policy.float().masked_fill(~legal, float("-inf"))
+        logits = InstinctNet.masked_logits(out.policy, legal)
         return logits.argmax(dim=-1).tolist()

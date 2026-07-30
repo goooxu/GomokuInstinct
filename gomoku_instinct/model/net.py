@@ -175,10 +175,13 @@ class InstinctNet(nn.Module):
 
     # ── 推理辅助 ────────────────────────────────────────────────────────────
     @staticmethod
-    def masked_policy(logits: torch.Tensor, legal: torch.Tensor) -> torch.Tensor:
-        """把非法点（已占点）压到负无穷。
+    def masked_logits(logits: torch.Tensor, legal: torch.Tensor) -> torch.Tensor:
+        """把非法点（已占点）压到负无穷。**返回的仍是 logits，不是概率。**
 
         注意：禁手点在严格 RIF 语义下是合法落子，因此**不**在这里屏蔽。
+
+        这是零搜索部署路径上唯一的非模型逻辑（第 10 章），所以只留这一份定义 ——
+        对战引擎的单局与批量两条路径都调它，免得哪天有人只改了其中一处。
         """
         return logits.float().masked_fill(~legal, float("-inf"))
 

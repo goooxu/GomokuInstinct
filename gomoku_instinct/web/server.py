@@ -31,6 +31,12 @@ from ..rules import BLACK, WHITE, ForbiddenSemantics, Game, Outcome, RenjuRules
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
+# 页面按概率阈值筛候选，阈值最低可以调到 1%。概率大于 1% 的点最多 99 个，
+# 所以取 100 就保证**页面永远不会因为服务端截断而漏掉候选**。
+# 这里不做"取前 N 个"式的静默截断：截断了却不说，看到的人会以为模型只考虑了这几个点。
+MIN_CANDIDATE_THRESHOLD_PCT = 1
+ANALYSIS_TOP_K = 100 // MIN_CANDIDATE_THRESHOLD_PCT
+
 # 会话上限。超出后淘汰最旧的一局 —— 本地试玩工具，不做持久化。
 MAX_SESSIONS = 64
 MAX_BODY = 1 << 20
@@ -145,7 +151,7 @@ class App:
         return player
 
     def _analyze_on_thread(self, game: Game, index: int):
-        return self.ensure_loaded(index).analyze(game)
+        return self.ensure_loaded(index).analyze(game, ANALYSIS_TOP_K)
 
     def analyze(self, game: Game, index: int = 0):
         return self._infer.submit(self._analyze_on_thread, game, index).result()

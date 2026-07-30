@@ -29,12 +29,12 @@
   #panel { flex: 0 0 300px; background: var(--panel); border: 1px solid var(--border);
            border-radius: 8px; padding: 14px 16px; }
 
-  /* 窄屏改成纵向排列。#panel 是 flex: 0 0 300px（不收缩），横着放不下时会把
-     #boardWrap 挤成负宽度，棋盘直接错乱。这里必须显式换向，光靠 flex 收缩救不回来。 */
-  @media (max-width: 700px) {
-    #app { flex-direction: column; align-items: stretch; }
-    #panel { flex: 1 1 auto; width: 100%; }
-  }
+  /* 纵向排列。**不用 media query 拍一个断点** —— 该不该换向取决于"哪种排法棋盘更大"，
+     而那要同时看窗口的宽和高，CSS 里算不出来。由 resize() 实测后加/去这个类。
+     #panel 是 flex: 0 0 300px（不收缩），横着放不下时会把 #boardWrap 挤成负宽度，
+     棋盘直接错乱，所以必须显式换向，光靠 flex 收缩救不回来。 */
+  #app.stacked { flex-direction: column; align-items: stretch; }
+  #app.stacked #panel { flex: 1 1 auto; width: 100%; }
   h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .02em; }
   .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
@@ -108,7 +108,12 @@
       <button id="resign">认输</button>
     </div>
     <div class="row">
-      <label class="chk"><input type="checkbox" id="showNum"> 手数</label>
+      <label class="chk" style="flex:1 1 auto; min-width:0">
+        候选阈值 ≥
+        <input type="range" id="thr" min="1" max="50" step="1" value="5"
+               style="flex:1 1 70px; min-width:60px">
+        <span id="thrVal" style="width:3.2em; text-align:right">5%</span>
+      </label>
     </div>
 
     <div class="sec" id="evalSec" style="display:none">
@@ -129,8 +134,8 @@
       两局可以用不同的模型同时下。刷新不会丢棋。<br>
       鼠标悬停会在落点上显示半透明的棋子、四边坐标同步高亮，确认后再点。<br>
       方向键也能移动落点，回车落子。<br>
-      AI 落子后，那颗子上写着模型给这一手的概率，蓝圈是它同时在考虑的
-      另外两个点。
+      AI 落子后，那颗子上写着模型给这一手的概率，蓝圈是它同时在考虑的其它点 ——
+      概率不低于「候选阈值」的全部会标出来，拖动滑杆可以调松调紧。
     </div>
   </div>
 </div>
@@ -246,20 +251,30 @@ async function loadModels() {
 }
 
 // ── 绘制 ────────────────────────────────────────────────────────────────────
-const STACK_QUERY = "(max-width: 700px)";
+// 面板固定宽度 + 两侧 padding + 中间间距。改 CSS 时这里要跟着改。
+const PANEL_W = 300, GAP = 20, APP_PAD = 32, VIEW_MARGIN = 34;
 
 function resize() {
   if (!S) return;
-  const wrap = $("boardWrap");
-  // 纵向排列时面板在棋盘下方，棋盘只受宽度约束；横向排列时还要留出窗口高度，
-  // 不然棋盘会长过一屏。
-  const stacked = window.matchMedia(STACK_QUERY).matches;
-  const avail = stacked
-    ? wrap.clientWidth
-    : Math.min(wrap.clientWidth, window.innerHeight - 34);
-  // **不能**再把它抬到一个固定下限。原来写的是 Math.max(280, avail)：
-  // 容器窄于 280px 时画布就比容器还宽，右边一列连同坐标直接被切掉 ——
-  // 纵向排列 + 窄屏时必现。棋盘宁可小，也不能超出容器。
+  const app = $("app"), wrap = $("boardWrap");
+
+  // 选哪种排法，标准只有一条：**哪种棋盘更大**。
+  //
+  // 左右排布时棋盘宽度要让出面板的 320px；上下排布时能用满整个宽度，
+  // 但两种都不能超过一屏高（超了就得滚动才能看全棋盘）。
+  // 于是：窗口够宽时高度才是瓶颈，两种排法棋盘一样大 —— 那就用左右排布，
+  // 面板不用滚动就看得见；窗口一窄，宽度成为瓶颈，上下排布的棋盘更大，就换向。
+  const total = app.clientWidth - APP_PAD;
+  const heightCap = window.innerHeight - VIEW_MARGIN;
+  const sideBySide = Math.min(total - PANEL_W - GAP, heightCap);
+  const stacked = Math.min(total, heightCap);
+  app.classList.toggle("stacked", stacked > sideBySide);
+
+  // 换类会改变 #boardWrap 的宽度，必须重新量，不能用上面算的估计值。
+  const avail = Math.min(wrap.clientWidth, heightCap);
+  // **不能**把它抬到一个固定下限。原来写的是 Math.max(280, avail)：
+  // 容器窄于 280px 时画布就比容器还宽，右边一列连同坐标直接被切掉。
+  // 棋盘宁可小，也不能超出容器。
   px = Math.floor(Math.max(1, avail));
   cell = px / (S.size + 1);
   const dpr = window.devicePixelRatio || 1;
@@ -286,16 +301,22 @@ const shownLast = () =>
   viewPly === null ? S.last_move
   : viewPly > 0 ? S.history[viewPly - 1].move : null;
 
-// 要在棋盘上标出来的候选点：取最近一次分析里仍是空点的前两个。
+// 要在棋盘上标出来的候选点：最近一次分析里概率不低于阈值、且仍是空点的**全部**候选。
 //
 // AI 落子后 top[0] 正是它刚下的那手、已经有子，被空点过滤自然排除，
-// 于是这里拿到的就是第 2、第 3 高的点；轮到人按提示时，拿到的是它自己会走的两个。
+// 剩下的就是它同时还在考虑的点；轮到人按提示时，拿到的是它自己会走的那些。
+//
+// 阈值由页面上的滑杆定，纯客户端筛选：拖动立刻重画，不用回服务端。
+// 服务端一次给够 100 个候选（见 ANALYSIS_TOP_K），所以阈值降到 1% 也不会被截断。
 const pct = (p) => (p >= 0.005 ? Math.round(p * 100) + "%" : "<1%");
+
+const threshold = () => Number($("thr").value) / 100;
 
 function analysisMarks() {
   if (!S.analysis || viewPly !== null) return [];
   const grid = shownGrid();
-  return S.analysis.top.filter((cd) => grid[cd.move] === 0).slice(0, 2);
+  const t = threshold();
+  return S.analysis.top.filter((cd) => grid[cd.move] === 0 && cd.prob >= t);
 }
 
 function drawStone(c, r, color, alpha) {
@@ -394,7 +415,7 @@ function draw() {
     ctx.lineCap = "butt";
   }
 
-  // 模型同时在考虑的另外两个点，见 analysisMarks()
+  // 模型同时在考虑的其它点（概率 ≥ 阈值），见 analysisMarks()
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font = `600 ${Math.round(cell * 0.3)}px system-ui, sans-serif`;
@@ -424,32 +445,17 @@ function draw() {
   // 按提示（analysis.move 还是空点）时不画 —— 那手还没下，它是候选不是落子。
   const played =
     S.analysis && viewPly === null && grid[S.analysis.move] !== 0 ? S.analysis : null;
-  const showNum = $("showNum").checked;
-
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  // 手数
-  if (showNum) {
-    const upto = viewPly === null ? S.history.length : viewPly;
-    for (let i = 0; i < upto; i++) {
-      const h = S.history[i], c = h.move % N, r = (h.move - c) / N;
-      // 这颗子上还要写概率，就把手数上移并缩小，两个都看得见，不是二选一
-      const shared = played !== null && h.move === played.move;
-      ctx.font = `600 ${Math.round(cell * (shared ? 0.26 : 0.34))}px system-ui, sans-serif`;
-      ctx.fillStyle = h.color === S.colors.black ? "#e8e4dc" : "#2a2a2a";
-      ctx.fillText(String(i + 1), cx(c), cy(r) - (shared ? cell * 0.19 : 0));
-    }
-  }
-
   if (played !== null) {
     const c = played.move % N, r = (played.move - c) / N;
-    ctx.font = `600 ${Math.round(cell * (showNum ? 0.26 : 0.3))}px system-ui, sans-serif`;
+    ctx.font = `600 ${Math.round(cell * 0.3)}px system-ui, sans-serif`;
     ctx.fillStyle = grid[played.move] === S.colors.black ? "#e8e4dc" : "#2a2a2a";
-    ctx.fillText(pct(played.move_prob), cx(c), cy(r) + (showNum ? cell * 0.19 : 0));
+    ctx.fillText(pct(played.move_prob), cx(c), cy(r));
   }
 
-  // 最后一手：圈画在靠近子边缘处，好给中间的手数/概率让出位置
+  // 最后一手：圈画在靠近子边缘处，好给中间的概率让出位置
   if (last !== null && last !== undefined && grid[last]) {
     const c = last % N, r = (last - c) / N;
     ctx.strokeStyle = "#d43b26";
@@ -493,6 +499,8 @@ function render() {
   // 切换失败时（比如两个模型棋盘尺寸不一样）下拉框要弹回真正生效的那个，
   // 否则页面显示的和实际在下棋的不是同一个模型。
   renderModels();
+  // 这是个 <span>，不是输入控件 —— 写它不违反"render 不得回写输入控件"那条。
+  $("thrVal").textContent = $("thr").value + "%";
   $("status").textContent = statusText();
   $("status").classList.toggle("over", S.outcome !== "ongoing");
 
@@ -520,10 +528,16 @@ function render() {
     bar.style.background = v >= 0 ? "#4f7a4a" : "#a34a3c";
     $("evalNum").textContent =
       `${v >= 0 ? "+" : ""}${v.toFixed(3)}　（+1 表示${side}方必胜）`;
-    $("cands").innerHTML = a.top.map((cd) =>
-      `<div class="cand"><b>${cd.label}</b>` +
-      `<span class="g"><i style="width:${(cd.prob * 100).toFixed(0)}%"></i></span>` +
-      `<span>${(cd.prob * 100).toFixed(1)}%</span></div>`).join("");
+    // 侧栏列表用同一个阈值，和棋盘上的标记保持一致；
+    // 一个都不到阈值时明说，别让人以为是坏了。
+    const shown = a.top.filter((cd) => cd.prob >= threshold());
+    $("cands").innerHTML = shown.length
+      ? shown.map((cd) =>
+          `<div class="cand"><b>${cd.label}</b>` +
+          `<span class="g"><i style="width:${(cd.prob * 100).toFixed(0)}%"></i></span>` +
+          `<span>${(cd.prob * 100).toFixed(1)}%</span></div>`).join("")
+      : `<div class="cand" style="color:var(--muted)">没有概率 ≥ ` +
+        `${$("thr").value}% 的候选</div>`;
   }
 
   // 棋谱
@@ -610,7 +624,13 @@ $("model").onchange = () => {
 $("undo").onclick = () => guard(() => api("/api/undo", { sid: S.sid }));
 $("hint").onclick = () => guard(() => api("/api/hint", { sid: S.sid }));
 $("resign").onclick = () => guard(() => api("/api/resign", { sid: S.sid }));
-$("showNum").onchange = draw;
+$("thr").oninput = () => {
+  // 只是显示口径变了，不用回服务端 —— 候选一次就取够了。
+  // 注意：**不能**把这个值写进 render()，它是用户的输入控件，render 里回写
+  // 就是 #11 号那个坑。启动时读一次 localStorage 就够了。
+  localStorage.setItem("gi_thr", $("thr").value);
+  render();
+};
 $("toEnd").onclick = () => { viewPly = null; render(); };
 $("moves").onclick = (ev) => {
   const ply = ev.target.dataset && ev.target.dataset.ply;
@@ -620,6 +640,11 @@ $("moves").onclick = (ev) => {
   render();
 };
 window.addEventListener("resize", resize);
+
+// 候选阈值是显示口径，不属于某一局，用 localStorage 跨标签页共用。
+// 只在这里写一次输入控件，render() 里绝不碰它。
+const savedThr = localStorage.getItem("gi_thr");
+if (savedThr) $("thr").value = savedThr;
 
 // 刷新时先试着接回本标签页原来那一局，接不上再开新的。
 async function boot() {

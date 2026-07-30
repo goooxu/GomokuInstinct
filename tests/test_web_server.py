@@ -413,21 +413,28 @@ def test_page_javascript_parses():
 
 
 def test_analysis_marks_are_shown_by_default():
-    """模型的候选点必须默认画在棋盘上，而不是藏在开关后面。"""
+    """模型的候选点必须默认画在棋盘上，而不是藏在开关后面。
+
+    数量不再固定为两个：凡是概率不低于阈值的候选都要标出来，
+    所以这里只认「按阈值筛」和「确实画了」这两件事。
+    """
     body = _strip_comments(_function_body(_page(), "function analysisMarks()"))
-    assert "slice(0, 2)" in body, "候选点数量不再是固定两个"
+    assert "threshold()" in body, "候选点没有按阈值筛"
+    assert "slice(" not in body, "候选点被截断了固定条数"
     draw = _strip_comments(_function_body(_page(), "function draw()"))
     assert "analysisMarks()" in draw
 
 
-def test_played_probability_and_move_number_coexist():
-    """手数和已落子概率必须能同时显示，不是二选一。
-
-    两者都画在同一颗子的正中央的话，后画的会盖掉先画的 —— 看上去只是"手数没生效"。
-    """
+def test_played_probability_is_drawn(server):
+    """已落子的那颗子上要写模型给这一手的概率。"""
     draw = _strip_comments(_function_body(_page(), "function draw()"))
     assert "played.move_prob" in draw
-    assert "shared" in draw, "手数没有为概率让位"
+
+
+def test_move_numbers_are_gone():
+    """手数显示已经移除，相关控件和绘制都不该再留着。"""
+    page = _strip_comments(_page())
+    assert "showNum" not in page
 
 
 def test_tiny_probabilities_do_not_render_as_zero():
@@ -666,3 +673,80 @@ def test_state_carries_the_active_model(server):
     status, state = post(base, "/api/new", {"color": "black"})
     assert status == 200
     assert state["model"] == {"id": 0, "name": "a"}
+
+
+# ── 候选阈值 ────────────────────────────────────────────────────────────────
+
+
+def test_top_k_covers_the_lowest_threshold():
+    """服务端一次要给够候选，不能让页面因为截断而漏掉。
+
+    页面按概率阈值筛候选，阈值最低 1%；概率大于 1% 的点最多 99 个。
+    只要 top_k 不小于这个数，任何允许的阈值都不会被服务端悄悄截断 ——
+    截断了却不说，看到的人会以为模型只考虑了这几个点。
+    """
+    from gomoku_instinct.web import server as server_mod
+
+    most_possible = 100 // server_mod.MIN_CANDIDATE_THRESHOLD_PCT
+    assert server_mod.ANALYSIS_TOP_K >= most_possible
+
+
+def test_analysis_asks_for_the_full_candidate_list():
+    """走一手棋时必须按 ANALYSIS_TOP_K 要候选，不能用 analyze 的默认 5。"""
+    from gomoku_instinct.rules import ForbiddenSemantics, Game
+    from gomoku_instinct.web import server as server_mod
+
+    seen = {}
+
+    class _Recording(_StubPlayer):
+        def analyze(self, game, top_k: int = 5):
+            seen["top_k"] = top_k
+            return super().analyze(game, top_k)
+
+    app = App(_Recording(), {"step": 1}, SIZE)
+    app.analyze(Game(SIZE, app.rules, ForbiddenSemantics.LOSE))
+    assert seen["top_k"] == server_mod.ANALYSIS_TOP_K
+
+
+def test_threshold_slider_bounds_match_the_server():
+    """滑杆的下限不能比服务端 top_k 能覆盖的还低，否则又是静默截断。"""
+    import re
+
+    page = _page()
+    lo = int(re.search(r'id="thr"[^>]*\bmin="(\d+)"', page).group(1))
+    from gomoku_instinct.web import server as server_mod
+    assert lo >= server_mod.MIN_CANDIDATE_THRESHOLD_PCT
+
+
+def test_render_never_writes_the_threshold_input():
+    """阈值滑杆是输入控件，render() 不得回写 —— 同 #11 号那条不变量。"""
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function render()"))
+    assert not re.findall(r'\$\("thr"\)\.value\s*=(?!=)', body)
+
+
+def test_layout_direction_is_decided_by_board_size():
+    """换向不能靠拍一个 CSS 断点。
+
+    该不该上下排布取决于「哪种排法棋盘更大」，而那要同时看窗口的宽和高 ——
+    CSS media query 只能看其中一个，必然在某些窗口尺寸上选错。
+    """
+    page = _page()
+    assert "@media" not in page, "又用 media query 拍断点了"
+    body = _strip_comments(_function_body(page, "function resize()"))
+    assert "innerHeight" in body and "clientWidth" in body, "换向没有同时看宽和高"
+    assert 'classList.toggle("stacked"' in body
+
+
+def test_board_never_exceeds_its_container():
+    """棋盘尺寸绝不能被抬到一个固定下限。
+
+    原来写的是 Math.max(280, avail)：容器窄于 280px 时画布就比容器还宽，
+    右边一列连同坐标被切掉 —— 窄窗口下必现，而且不报任何错。
+    """
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function resize()"))
+    bad = re.findall(r"Math\.max\(\s*(\d+)", body)
+    assert all(int(n) <= 1 for n in bad), f"棋盘尺寸被抬到了固定下限: {bad}"

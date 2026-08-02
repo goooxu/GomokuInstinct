@@ -43,6 +43,17 @@ _FIELDS = {
 
 HISTORY = 4
 
+
+def _shard_order(name: str) -> tuple[int, str]:
+    """分片的时间序：先按序号，再按文件名兜底。
+
+    各 actor 的序号各自独立递增，但它们并行产出、速度接近，所以序号是时间的好代理。
+    序号解析不出来的排到最前（当作最旧），这样截断时先被丢掉。
+    """
+    stem = name.rsplit(".", 1)[0]
+    tail = stem.rsplit("_", 1)[-1]
+    return (int(tail) if tail.isdigit() else -1, name)
+
 _FIELDS_ORDER = list(_FIELDS)
 _PER_CELL_FIELDS = {"boards", "policy", "threat_self", "threat_opp", "forbidden"}
 
@@ -446,16 +457,25 @@ class ReplayBuffer:
         if not self.shard_dir or not os.path.isdir(self.shard_dir):
             return 0
         # 续训时把所有分片（自身的与各 actor 的）都算上
-        shards = sorted(
+        names = [
             f
             for f in os.listdir(self.shard_dir)
             if f.endswith(".npz") and not f.endswith(".tmp.npz")
-        )
-        if not shards:
+        ]
+        if not names:
             return 0
-        own = [f for f in shards if f.startswith(self.shard_prefix + "_")]
+        own = sorted(f for f in names if f.startswith(self.shard_prefix + "_"))
         if own:
             self._shard_index = int(own[-1].rsplit("_", 1)[1][:8]) + 1
+
+        # **按分片序号（即时间）排序，不能按文件名排。**
+        # 文件名是 actorN_XXXXXXXX.npz，按名字排会先按 actor 分组再按时间，
+        # 倒序装载就变成「actor2 的全部历史 → actor1 的一部分 → actor0 一条不要」。
+        # 磁盘上的分片总量一旦超过窗口容量就会触发截断，于是回放池悄悄换成了
+        # 一批更旧、且只来自部分 actor 的样本 —— 不报错，数据也合法，
+        # 只是教师更弱，策略目标质量下降。实测 top1 掉 4 个百分点、KL 涨 0.15，
+        # 而价值与威胁两项纹丝不动（它们的标签由规则导出，与教师强弱无关）。
+        shards = sorted(names, key=_shard_order)
 
         # total_added 统计的是「历史上一共产出过多少样本」，用于算样本复用率；
         # 从磁盘装回来不是新产出，不能重复计数。

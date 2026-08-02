@@ -703,3 +703,54 @@ def test_old_shards_without_new_fields_still_load(rules, tmp_path):
     assert len(buf) == 120
     batch = buf.sample(16, "cpu", np.random.default_rng(0))
     assert torch.all(batch.blunder_gap == 0.0)
+
+
+def test_restore_takes_the_newest_shards_across_all_actors(tmp_path):
+    """磁盘分片超过窗口容量时，装回来的必须是**全体最近**的，不能按 actor 倾斜。
+
+    文件名是 actorN_XXXXXXXX.npz，按文件名排序会先按 actor 分组再按时间；
+    倒序装载就变成「actor2 的全部历史 → actor1 的一部分 → actor0 一条不要」。
+    这不报错、数据也合法，只是悄悄换成了一批更旧、且只来自部分 actor 的样本
+    —— 实测策略 top1 掉 4 个百分点、KL 涨 0.15，而价值与威胁纹丝不动。
+    """
+    import numpy as np
+
+    from gomoku_instinct.train.replay import ReplayBuffer
+
+    size, n = 5, 25
+    shard_dir = tmp_path / "replay"
+    per_actor, shard = 4, 10          # 3 actor × 4 片 × 10 条 = 120 条
+    src = ReplayBuffer(10_000, size, shard_dir=str(shard_dir), shard_size=shard,
+                       keep_shards=0)
+    # 每一片用 move_number 标记它的时间序号，方便事后辨认装回来的是哪几片
+    for idx in range(per_actor):
+        for actor in range(3):
+            src.shard_prefix = f"actor{actor}"
+            src._shard_index = idx
+            src.add({
+                "boards": np.zeros((shard, n), np.uint8),
+                "policy": np.zeros((shard, n), np.float16),
+                "to_move": np.ones(shard, np.uint8),
+                "history": np.zeros((shard, 4), np.int32),
+                "move_number": np.full(shard, idx, np.int32),
+                "value": np.zeros(shard, np.float32),
+                "plies_remaining": np.zeros(shard, np.int32),
+                "next_move": np.zeros(shard, np.int32),
+                "root_value": np.zeros(shard, np.float32),
+                "blunder_gap": np.zeros(shard, np.float32),
+                "threat_self": np.zeros((shard, n), np.uint8),
+                "threat_opp": np.zeros((shard, n), np.uint8),
+                "forbidden": np.zeros((shard, n), np.uint8),
+            })
+    src.flush()
+
+    # 容量只装得下 6 片：应当是**最新两轮**（序号 3 和 2）的三个 actor 各一片
+    dst = ReplayBuffer(6 * shard, size, shard_dir=str(shard_dir))
+    loaded = dst.restore_from_shards()
+    assert loaded == 6 * shard
+
+    got = dst._data["move_number"][: dst.size]
+    assert set(int(x) for x in got) == {2, 3}, \
+        f"装回来的不是最新两轮，而是 {sorted(set(int(x) for x in got))}"
+    # 每个序号恰好三片（三个 actor 各一），说明没有按 actor 倾斜
+    assert sorted(int(x) for x in got).count(3) == 3 * shard

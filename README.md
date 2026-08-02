@@ -71,10 +71,10 @@ python scripts/train.py --run-dir runs/dev9 --board-size 9 \
 gomoku-instinct serve --ckpt <checkpoint> --port 8000
 
 # --ckpt 可以给多次，页面上就能切换；第一个是初始模型
-gomoku-instinct serve --ckpt runs/renju15b --ckpt runs/renju15 --port 8000
+gomoku-instinct serve --ckpt runs/renju15c --ckpt runs/renju15 --port 8000
 
 # 训练还在跑时加这个，每 60 秒自动换上最新 checkpoint，页面顶部的 step 会跟着走
-gomoku-instinct serve --ckpt runs/renju15b --reload-seconds 60
+gomoku-instinct serve --ckpt runs/renju15c --reload-seconds 60
 ```
 
 然后浏览器打开 `http://localhost:8000/`。棋盘是画出来的真棋盘：鼠标悬停会在落点上

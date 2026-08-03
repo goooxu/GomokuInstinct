@@ -113,8 +113,9 @@ void SelfPlayRunner::apply(const float* policy, const float* value) {
         std::memcpy(slot.root_policy.data(), priors,
                     static_cast<size_t>(n) * sizeof(float));
 
+        // 重搜只是评估一个已确定的局面，加噪只会污染目标
         const int count = slot.tree->root_child_count();
-        if (count > 0 && cfg_.dirichlet_eps > 0.0f) {
+        if (count > 0 && cfg_.dirichlet_eps > 0.0f && !slot.researching) {
           std::gamma_distribution<float> gamma(cfg_.dirichlet_alpha, 1.0f);
           float sum = 0.0f;
           for (int k = 0; k < count; ++k) {
@@ -135,7 +136,10 @@ void SelfPlayRunner::apply(const float* policy, const float* value) {
     for (int k = 0; k < slot.descent_depth; ++k) slot.pos->undo();
     slot.descent_depth = 0;
 
-    if (++slot.sims_done >= slot.sims_target) finish_move(slot);
+    if (++slot.sims_done >= slot.sims_target) {
+      if (slot.researching) finish_research_move(slot);
+      else finish_move(slot);
+    }
   };
   pool_->run(work, static_cast<int>(slots_.size()));
 }
@@ -246,7 +250,8 @@ void SelfPlayRunner::finish_move(Slot& slot) {
     }
   }
 
-  if (slot.full_search) {
+  // 开了两趟走的话，落子阶段一条样本都不产 —— 目标全部来自终局后的重搜。
+  if (slot.full_search && cfg_.research_last_plies <= 0) {
     int total_visits = 0;
     for (int m = 0; m < n; ++m) total_visits += slot.visit_counts[m];
     if (total_visits > 0) {
@@ -290,53 +295,131 @@ void SelfPlayRunner::finish_move(Slot& slot) {
 }
 
 void SelfPlayRunner::finish_game(Slot& slot, Outcome outcome, bool by_resign) {
-  const std::vector<int32_t>& moves = slot.pos->moves();
-  const int total_plies = static_cast<int>(moves.size());
+  const int total_plies = static_cast<int>(slot.pos->moves().size());
 
-  for (Sample& sample : slot.pending) {
-    sample.value = result_from(outcome, sample.to_move);
-    sample.plies_remaining = total_plies - sample.ply;
-    // 对手的实际应手 —— 逼网络内化一层前瞻。
-    sample.next_move =
-        (sample.ply + 1 < total_plies) ? moves[sample.ply + 1] : -1;
-  }
-  // 尾段窗口：只留距终局 keep_last_plies 手以内的样本。
-  // 必须放在上面那个循环之后 —— plies_remaining 要等 total_plies 确定才算得出来。
-  if (cfg_.keep_last_plies > 0) {
-    const size_t before = slot.pending.size();
-    const int window = cfg_.keep_last_plies;
-    slot.pending.erase(
-        std::remove_if(slot.pending.begin(), slot.pending.end(),
-                       [window](const Sample& s) {
-                         return s.plies_remaining > window;
-                       }),
-        slot.pending.end());
-    slot.stats.samples_dropped +=
-        static_cast<int64_t>(before - slot.pending.size());
-  }
-
-  // stats.samples 统计的必须是**过滤后**的数量：样本产率、以及 trainer 那边
-  // 的样本复用率都由它推出来，多算就全错。
-  slot.stats.samples += static_cast<int64_t>(slot.pending.size());
-  slot.finished.insert(slot.finished.end(),
-                       std::make_move_iterator(slot.pending.begin()),
-                       std::make_move_iterator(slot.pending.end()));
-  slot.pending.clear();
-
+  // 统计先记，两条路径都要。
   slot.stats.games += 1;
   slot.stats.completed_plies += total_plies;
   if (outcome == Outcome::BLACK_WIN) slot.stats.black_wins += 1;
   else if (outcome == Outcome::WHITE_WIN) slot.stats.white_wins += 1;
   else slot.stats.draws += 1;
-
   if (by_resign) slot.stats.resigns += 1;
-
-  // 审计：认输方最终反而赢了，说明这条阈值会误杀。
   if (slot.would_resign_side != 0 &&
       result_from(outcome, slot.would_resign_side) > 0.0f) {
     slot.stats.resign_false_positives += 1;
   }
 
+  // 两趟走：不在这里收样本，转入重搜阶段。认输局跳过 —— 它没走到真正的终局，
+  // 胜负是价值头判的，拿它的残局当高质量目标说不通。
+  if (cfg_.research_last_plies > 0 && !by_resign && total_plies > 0) {
+    slot.game_outcome = outcome;
+    slot.total_plies = total_plies;
+    slot.game_moves = slot.pos->moves();  // undo() 会弹掉 moves_，必须先拷
+    begin_research(slot);
+    return;
+  }
+
+  // 原来的边下边采路径。
+  const std::vector<int32_t>& moves = slot.pos->moves();
+  for (Sample& sample : slot.pending) {
+    sample.value = result_from(outcome, sample.to_move);
+    sample.plies_remaining = total_plies - sample.ply;
+    sample.next_move =
+        (sample.ply + 1 < total_plies) ? moves[sample.ply + 1] : -1;
+  }
+  slot.stats.samples += static_cast<int64_t>(slot.pending.size());
+  slot.finished.insert(slot.finished.end(),
+                       std::make_move_iterator(slot.pending.begin()),
+                       std::make_move_iterator(slot.pending.end()));
+  slot.pending.clear();
+  start_game(slot);
+}
+
+// ── 尾段重搜 ────────────────────────────────────────────────────────────────
+//
+// 一局走完之后，把最后 research_last_plies 个局面逐个用满 sims 重新搜一遍。
+// 每个局面仍然一轮一次下潜，所以批大小恒定不变，和落子阶段完全同构 ——
+// 从外面看，这个 slot 只是在「下一局特别的棋」。
+
+void SelfPlayRunner::begin_research(Slot& slot) {
+  const int window = std::min(cfg_.research_last_plies, slot.total_plies);
+  const int from_ply = slot.total_plies - window;
+  while (slot.pos->ply() > from_ply) slot.pos->undo();
+  slot.researching = true;
+  start_research_move(slot);
+}
+
+void SelfPlayRunner::start_research_move(Slot& slot) {
+  slot.tree->clear();
+  slot.root_ply = slot.pos->ply();
+  slot.sims_done = 0;
+  slot.sims_target = cfg_.sims;  // 重搜一律用满 sims，这正是两趟走的意义
+}
+
+void SelfPlayRunner::finish_research_move(Slot& slot) {
+  const int n = num_cells();
+  const int ply = slot.pos->ply();
+  slot.tree->root_visit_counts(slot.visit_counts.data());
+
+  int total_visits = 0;
+  for (int m = 0; m < n; ++m) total_visits += slot.visit_counts[m];
+
+  if (total_visits > 0) {
+    slot.tree->root_child_values(slot.child_values.data());
+    int mcts_move = -1, best_visits = -1, raw_move = -1;
+    float best_prior = -1.0f;
+    for (int m = 0; m < n; ++m) {
+      if (slot.visit_counts[m] > best_visits) {
+        best_visits = slot.visit_counts[m];
+        mcts_move = m;
+      }
+      if (slot.pos->is_legal(m) && slot.root_policy[m] > best_prior) {
+        best_prior = slot.root_policy[m];
+        raw_move = m;
+      }
+    }
+    float blunder_gap = 0.0f;
+    if (mcts_move >= 0 && raw_move >= 0 && mcts_move != raw_move) {
+      blunder_gap = slot.child_values[mcts_move] - slot.child_values[raw_move];
+      if (blunder_gap < 0.0f) blunder_gap = 0.0f;
+    }
+
+    Sample sample;
+    sample.board.resize(n);
+    slot.pos->copy_grid_to(sample.board.data());
+    sample.policy.resize(n);
+    const float inv = 1.0f / static_cast<float>(total_visits);
+    for (int m = 0; m < n; ++m) {
+      sample.policy[m] = static_cast<float>(slot.visit_counts[m]) * inv;
+    }
+    sample.to_move = slot.pos->to_move();
+    slot.pos->history(sample.history);
+    sample.move_number = ply;
+    sample.ply = ply;
+    sample.root_value = slot.tree->root_value();
+    sample.blunder_gap = blunder_gap;
+    sample.searched = 1;
+    // 结果已知，三个标签直接填满，不需要 pending 再等一轮
+    sample.value = result_from(slot.game_outcome, sample.to_move);
+    sample.plies_remaining = slot.total_plies - ply;
+    sample.next_move = (ply + 1 < slot.total_plies) ? slot.game_moves[ply + 1] : -1;
+    slot.finished.push_back(std::move(sample));
+    slot.stats.samples += 1;
+  }
+
+  // 走回原来那一手，继续搜下一个局面
+  if (ply < slot.total_plies) slot.pos->play(slot.game_moves[ply]);
+  if (slot.pos->ply() < slot.total_plies) {
+    start_research_move(slot);
+    return;
+  }
+  flush_game(slot);
+}
+
+void SelfPlayRunner::flush_game(Slot& slot) {
+  slot.researching = false;
+  slot.game_moves.clear();
+  slot.pending.clear();
   start_game(slot);
 }
 
@@ -389,7 +472,6 @@ Stats SelfPlayRunner::stats() const {
     total.moves += slot.stats.moves;
     total.completed_plies += slot.stats.completed_plies;
     total.samples += slot.stats.samples;
-    total.samples_dropped += slot.stats.samples_dropped;
     total.black_wins += slot.stats.black_wins;
     total.white_wins += slot.stats.white_wins;
     total.draws += slot.stats.draws;

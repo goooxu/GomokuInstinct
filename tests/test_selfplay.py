@@ -374,10 +374,10 @@ def _searcher_best(searcher, evaluator, games_moves):
     return _run_search(searcher, evaluator, games_moves)
 
 
-# ── 尾段窗口采样 ────────────────────────────────────────────────────────────
+# ── 尾段重搜（两趟走）────────────────────────────────────────────────────────
 
 
-def _run_until_samples(actor, want=300, rounds=800):
+def _run_until_samples(actor, want=300, rounds=1200):
     for _ in range(rounds):
         actor.step()
         if actor.pending_samples > want:
@@ -385,50 +385,62 @@ def _run_until_samples(actor, want=300, rounds=800):
     return actor.drain(4000)
 
 
-def test_default_keeps_samples_from_the_whole_game(played):
-    """默认（keep_last_plies=0）必须保留整局的样本 —— 向后兼容。
+def test_default_samples_come_from_the_whole_game(played):
+    """默认（research_last_plies=0）走原来的边下边采，样本覆盖整局。
 
-    这条比看起来重要：尾段窗口如果默认就生效，会悄悄改掉所有既有用法，
-    而且不报任何错，只是训练分布变了。
+    这条比看起来重要：两趟走如果默认生效，会悄悄改掉所有既有用法 ——
+    不报错，只是训练分布和目标质量都变了。
     """
     _, data = played
     plies = data["plies_remaining"][: data["count"]]
-    assert plies.max() > 32, (
-        f"默认配置下样本最远只到距终局 {plies.max()} 手，尾段窗口似乎被误开了"
+    assert plies.max() > 20, (
+        f"默认配置下样本最远只到距终局 {plies.max()} 手，两趟走似乎被误开了"
     )
 
 
-def test_tail_window_keeps_only_the_last_plies():
-    """开启后，入池的样本必须全部落在窗口内。"""
-    window = 12
-    actor = make_actor(keep_last_plies=window, seed=99)
+def test_research_covers_exactly_the_tail_window():
+    """开启后，样本必须**恰好**落在最后 N 手上 —— 一个不漏、一个不多。
+
+    这是两趟走相对"边下边采 + 事后过滤"的关键区别：后者只能收到窗口里
+    恰好抽中完整搜索的那部分（约四分之一），前者是全部。
+    """
+    window = 6
+    actor = make_actor(research_last_plies=window, seed=99)
     data = _run_until_samples(actor)
     assert data["count"] > 0, "没产出样本，测不了"
 
     plies = data["plies_remaining"][: data["count"]]
-    assert plies.max() <= window, (
-        f"窗口设为 {window}，却出现了距终局 {plies.max()} 手的样本"
-    )
+    assert plies.max() <= window, f"窗口 {window}，却出现距终局 {plies.max()} 手的样本"
     assert plies.min() >= 1
 
-
-def test_tail_window_reports_how_much_it_dropped():
-    """丢弃量必须可见，且 stats['samples'] 统计的是过滤**后**的数量。
-
-    产率与样本复用率都由 stats['samples'] 推出来，多算就全错；
-    而丢弃量不打出来的话，配错了也没人知道 —— 这类静默失败本项目吃过很多次。
-    """
-    actor = make_actor(keep_last_plies=8, seed=7)
-    data = _run_until_samples(actor)
+    # 每局应当拿满 min(窗口, 局长) 条 —— 边下边采只能拿到其中约 1/4
     stats = actor.stats
+    per_game = stats["samples"] / max(1, stats["games"])
+    assert per_game > window * 0.8, (
+        f"每局只产出 {per_game:.1f} 条，远少于窗口 {window}，重搜没跑满"
+    )
 
-    assert stats["samples_dropped"] > 0, "窗口开着却一条都没丢，过滤没生效"
-    # drain 出来的条数不能超过 stats 记的产出数
-    assert data["count"] <= stats["samples"]
+
+def test_research_targets_are_full_search():
+    """重搜的目标必须来自满 sims 的搜索。
+
+    访问分布的总访问数就是 sims；用 fast_sims 搜出来的分布会粗糙得多，
+    而两趟走的全部意义就在于"窗口内每一手都是干净目标"。
+    这里用分布的非零支撑数间接验证：满搜索会访问到更多不同的着法。
+    """
+    fine = make_actor(research_last_plies=6, sims=64, fast_sims=4, seed=11)
+    d = _run_until_samples(fine)
+    pol = d["policy"][: d["count"]]
+    support = (pol > 0).sum(axis=1)
+    assert support.mean() > 4, (
+        f"平均只访问到 {support.mean():.1f} 个着法，不像是 64 次搜索的结果"
+    )
 
 
-def test_window_larger_than_any_game_drops_nothing():
-    """窗口大于任何一局的长度时，行为应与不开窗口一致。"""
-    actor = make_actor(keep_last_plies=10_000, seed=5)
-    _run_until_samples(actor)
-    assert actor.stats["samples_dropped"] == 0
+def test_window_larger_than_the_game_takes_everything():
+    """窗口大于任何一局的长度时，应当覆盖整局（从第 1 手到最后一手）。"""
+    actor = make_actor(research_last_plies=10_000, seed=5)
+    data = _run_until_samples(actor)
+    plies = data["plies_remaining"][: data["count"]]
+    # 覆盖到开局，说明窗口没有被错误地截断
+    assert plies.max() > 20

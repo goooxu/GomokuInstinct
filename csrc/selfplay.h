@@ -47,16 +47,20 @@ struct SelfPlayConfig {
   // 目的是让样本覆盖到部署时真正会走进去的局面，消除训练/部署的分布漂移。
   float raw_policy_fraction = 0.0f;
 
-  // 尾段窗口：只保留距离终局 keep_last_plies 手以内的样本，其余在对局结束时丢弃。
-  // 0 = 保留全部（默认，即历史行为）。
+  // 尾段重搜（两趟走）：对局照常走完，**落子过程中不产出任何样本**；
+  // 终局后回头把最后 research_last_plies 个局面用满 sims 重新搜一遍，
+  // 那次搜索的访问分布才是训练目标。0 = 关闭，走原来的边下边采。
   //
-  // 它**只改哪些样本入池，不改哪一手做完整搜索** —— 搜索深度在落子前就由
-  // full_search_prob 掷骰子定了，而「是不是最后 N 手」要等对局结束才知道，
-  // 两者本来就没法同时满足。所以这里是对局结束时的一道过滤，自博弈算力完全不变。
+  // 为什么要两趟：搜索深度在落子前就定了，而「这一手是不是最后 N 手」
+  // 要等对局结束才知道 —— 两者在一趟里没法同时满足。分成两趟就都满足了：
+  // 最后 N 个局面**一个不漏**，且每一个都是满 sims 的干净目标。
   //
   // 动机：残局的价值标签方差最小。开局局面的胜负标签噪声极大 ——
   // 一局棋的结果和第 3 手的关系很弱，却被当成同等确定的监督信号。
-  int keep_last_plies = 0;
+  //
+  // 重搜时**不加 Dirichlet 噪声**：噪声是为了让自博弈去试没试过的着法，
+  // 而这里只是评估一个已经确定的局面，加噪只会污染目标。
+  int research_last_plies = 0;
 
   bool resign_enabled = true;
   float resign_threshold = -0.92f;
@@ -75,9 +79,6 @@ struct Stats {
   int64_t moves = 0;          // 所有落子，含仍在进行中的对局
   int64_t completed_plies = 0;  // 仅已完成对局的手数
   int64_t samples = 0;
-  // 被尾段窗口丢掉的样本数。过滤会丢掉相当比例的样本，不给个可见的数字，
-  // 配错了也没人知道 —— 这类「不报错、只是悄悄少了」正是本项目反复吃亏的地方。
-  int64_t samples_dropped = 0;
   int64_t black_wins = 0;
   int64_t white_wins = 0;
   int64_t draws = 0;
@@ -165,12 +166,24 @@ class SelfPlayRunner {
     bool raw_policy_game = false;
     bool disable_resign = false;
     uint8_t would_resign_side = 0;  // 审计局里「本该认输」的一方
+
+    // ── 尾段重搜 ──
+    // undo() 会把 moves_ 一起弹掉，所以回退之前必须先把着法列表拷出来，
+    // 否则重搜时就取不到「这一手之后对手怎么应」了。
+    bool researching = false;
+    std::vector<int32_t> game_moves;
+    Outcome game_outcome = Outcome::ONGOING;
+    int total_plies = 0;
   };
 
   void start_game(Slot& slot);
   void start_move(Slot& slot);
   void finish_move(Slot& slot);
   void finish_game(Slot& slot, Outcome outcome, bool by_resign);
+  void begin_research(Slot& slot);
+  void start_research_move(Slot& slot);
+  void finish_research_move(Slot& slot);
+  void flush_game(Slot& slot);
   int choose_move(Slot& slot);
 
   SelfPlayConfig cfg_;

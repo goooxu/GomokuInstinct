@@ -50,9 +50,9 @@ class TrainerConfig:
     temperature: float = 1.0
     temperature_moves: int = 16
     raw_policy_fraction: float = 0.25
-    # 尾段窗口：只保留距终局这么多手以内的样本，0 = 保留全部。
-    # 只改入池规则，不改搜索深度 —— 详见 csrc/selfplay.h 里的说明。
-    keep_last_plies: int = 0
+    # 尾段重搜（两趟走）：终局后回头把最后这么多个局面用满 sims 重搜一遍，
+    # 那次搜索的分布才是训练目标。0 = 关闭。详见 csrc/selfplay.h。
+    research_last_plies: int = 0
     resign_enabled: bool = True
     resign_threshold: float = -0.92
     resign_audit_fraction: float = 0.05
@@ -174,7 +174,7 @@ class Trainer:
             temperature=cfg.temperature,
             temperature_moves=cfg.temperature_moves,
             raw_policy_fraction=cfg.raw_policy_fraction,
-            keep_last_plies=cfg.keep_last_plies,
+            research_last_plies=cfg.research_last_plies,
             resign_enabled=cfg.resign_enabled,
             resign_threshold=cfg.resign_threshold,
             resign_audit_fraction=cfg.resign_audit_fraction,

@@ -110,7 +110,7 @@ def main() -> int:
         temperature=tcfg.temperature,
         temperature_moves=tcfg.temperature_moves,
         raw_policy_fraction=tcfg.raw_policy_fraction,
-        keep_last_plies=tcfg.keep_last_plies,
+        research_last_plies=tcfg.research_last_plies,
         resign_enabled=tcfg.resign_enabled,
         resign_threshold=tcfg.resign_threshold,
         resign_audit_fraction=tcfg.resign_audit_fraction,
@@ -179,12 +179,9 @@ def main() -> int:
             else:
                 # 黑白和三项都打出来：连珠规则不对称（黑必须恰好五连、还有禁手约束），
                 # 只看黑胜率分不清「黑方在输」和「大量和棋」。
-                dropped = stats.get("samples_dropped", 0)
-                produced = stats["samples"] + dropped
-                # 尾段窗口丢掉了多少 —— 不打出来就没人知道它有没有按预期生效
-                window = (
-                    f"窗口丢弃 {dropped / max(1, produced):.1%}  " if dropped else ""
-                )
+                # 每局产多少条样本。两趟走时它应当稳定等于 min(窗口, 局长)，
+                # 偏离就说明重搜没按预期跑 —— 不打出来没人会发现。
+                window = f"{stats['samples'] / games:.1f} 条/局  "
                 rates = (
                     f"{stats['completed_plies'] / games:.0f} 手/局  "
                     f"黑{stats['black_wins']}/白{stats['white_wins']}/和{stats['draws']}  "

@@ -27,13 +27,25 @@ mkdir -p "$CONTAINER_HOME" "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR"
 # 项目目录一旦被移动，旧缓存就会指向不存在的路径，而且报出来的错完全看不出根因
 # —— 实测是在 torch/_inductor/remote_cache.py 里对着旧路径 makedirs 时抛
 # PermissionError。所以记下缓存是为哪个根目录建的，根目录一变就整个清掉重建。
+# 这个标记会被并发读写：多卡编排一次拉起四个容器，四个 docker_run.sh 几乎同时跑到这里。
+# 原来的写法每次都无条件 `> $ROOT_MARKER`（先截断再写），别的进程恰好在那一瞬 cat
+# 就会读到空内容、判定"根目录变了"，进而 rm -rf 掉**正在被其它容器使用的**编译缓存。
+# 实际发生过一次：一个 actor 因此把缓存删到一半（rm 撞上并发写返回非零，
+# 又被 set -e 直接带走），整个进程没起来，而 launch 脚本照样报告"已启动"。
+#
+# 两处修法：内容已经正确就**根本不写**（消除截断窗口）；真要更新时先写临时文件再
+# 原子 rename。清理失败也不再中止脚本 —— 缓存清不掉最多是慢一点，不该让容器起不来。
 ROOT_MARKER="$ROOT/build/.cache_root"
-if [ -f "$ROOT_MARKER" ] && [ "$(cat "$ROOT_MARKER")" != "$ROOT" ]; then
-  echo "检测到项目根目录已变更（原 $(cat "$ROOT_MARKER")），清理编译缓存……" >&2
-  rm -rf "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR"
+marker_now=""
+[ -f "$ROOT_MARKER" ] && marker_now="$(cat "$ROOT_MARKER" 2>/dev/null || true)"
+if [ -n "$marker_now" ] && [ "$marker_now" != "$ROOT" ]; then
+  echo "检测到项目根目录已变更（原 $marker_now），清理编译缓存……" >&2
+  rm -rf "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR" || true
   mkdir -p "$EXT_DIR" "$INDUCTOR_DIR" "$TRITON_DIR"
 fi
-echo "$ROOT" > "$ROOT_MARKER"
+if [ "$marker_now" != "$ROOT" ]; then
+  printf '%s\n' "$ROOT" > "$ROOT_MARKER.$$" && mv -f "$ROOT_MARKER.$$" "$ROOT_MARKER"
+fi
 
 opts=(
   --rm

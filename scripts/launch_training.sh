@@ -124,10 +124,24 @@ for i in "${!ACTOR_GPUS[@]}"; do
       --device cuda
 done
 
-sleep 3
+# 起完必须逐个核实。容器起不来是**静默**的：nohup 的失败不会传回来，
+# 脚本照样退出 0。曾经因此少跑了一个 actor —— 训练用 2/3 的产能一路跑下去，
+# 而所有日志看起来都正常。多等一会儿再数，比事后从吞吐量里反推便宜得多。
+sleep 15
 echo
 echo "在跑的容器："
 docker ps --filter "name=^${TAG}_" --format '  {{.Names}}' || true
+
+expected=$(( 1 + ${#ACTOR_GPUS[@]} ))
+running=$(docker ps --filter "name=^${TAG}_" --format '{{.Names}}' | wc -l)
+echo
+if [ "$running" -ne "$expected" ]; then
+  echo "!! 只有 $running/$expected 个容器在跑。缺失的那个多半启动即退出，"
+  echo "!! 去 $RUN_DIR/logs/ 下看对应日志的末尾。"
+  echo "!! 现在就停下来排查 —— 少一个 actor 训练照样能跑完，只是慢，不会有人发现。"
+  exit 1
+fi
+echo "全部 $expected 个容器就位。"
 echo
 echo "查看进度：python scripts/report.py --run-dir $RUN_DIR"
 echo "停止：    $0 $RUN_DIR stop"

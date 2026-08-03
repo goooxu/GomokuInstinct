@@ -47,6 +47,17 @@ struct SelfPlayConfig {
   // 目的是让样本覆盖到部署时真正会走进去的局面，消除训练/部署的分布漂移。
   float raw_policy_fraction = 0.0f;
 
+  // 尾段窗口：只保留距离终局 keep_last_plies 手以内的样本，其余在对局结束时丢弃。
+  // 0 = 保留全部（默认，即历史行为）。
+  //
+  // 它**只改哪些样本入池，不改哪一手做完整搜索** —— 搜索深度在落子前就由
+  // full_search_prob 掷骰子定了，而「是不是最后 N 手」要等对局结束才知道，
+  // 两者本来就没法同时满足。所以这里是对局结束时的一道过滤，自博弈算力完全不变。
+  //
+  // 动机：残局的价值标签方差最小。开局局面的胜负标签噪声极大 ——
+  // 一局棋的结果和第 3 手的关系很弱，却被当成同等确定的监督信号。
+  int keep_last_plies = 0;
+
   bool resign_enabled = true;
   float resign_threshold = -0.92f;
   float resign_audit_fraction = 0.05f;
@@ -64,6 +75,9 @@ struct Stats {
   int64_t moves = 0;          // 所有落子，含仍在进行中的对局
   int64_t completed_plies = 0;  // 仅已完成对局的手数
   int64_t samples = 0;
+  // 被尾段窗口丢掉的样本数。过滤会丢掉相当比例的样本，不给个可见的数字，
+  // 配错了也没人知道 —— 这类「不报错、只是悄悄少了」正是本项目反复吃亏的地方。
+  int64_t samples_dropped = 0;
   int64_t black_wins = 0;
   int64_t white_wins = 0;
   int64_t draws = 0;

@@ -372,3 +372,63 @@ def test_search_returns_legal_moves_and_marks_inactive_slots():
 
 def _searcher_best(searcher, evaluator, games_moves):
     return _run_search(searcher, evaluator, games_moves)
+
+
+# ── 尾段窗口采样 ────────────────────────────────────────────────────────────
+
+
+def _run_until_samples(actor, want=300, rounds=800):
+    for _ in range(rounds):
+        actor.step()
+        if actor.pending_samples > want:
+            break
+    return actor.drain(4000)
+
+
+def test_default_keeps_samples_from_the_whole_game(played):
+    """默认（keep_last_plies=0）必须保留整局的样本 —— 向后兼容。
+
+    这条比看起来重要：尾段窗口如果默认就生效，会悄悄改掉所有既有用法，
+    而且不报任何错，只是训练分布变了。
+    """
+    _, data = played
+    plies = data["plies_remaining"][: data["count"]]
+    assert plies.max() > 32, (
+        f"默认配置下样本最远只到距终局 {plies.max()} 手，尾段窗口似乎被误开了"
+    )
+
+
+def test_tail_window_keeps_only_the_last_plies():
+    """开启后，入池的样本必须全部落在窗口内。"""
+    window = 12
+    actor = make_actor(keep_last_plies=window, seed=99)
+    data = _run_until_samples(actor)
+    assert data["count"] > 0, "没产出样本，测不了"
+
+    plies = data["plies_remaining"][: data["count"]]
+    assert plies.max() <= window, (
+        f"窗口设为 {window}，却出现了距终局 {plies.max()} 手的样本"
+    )
+    assert plies.min() >= 1
+
+
+def test_tail_window_reports_how_much_it_dropped():
+    """丢弃量必须可见，且 stats['samples'] 统计的是过滤**后**的数量。
+
+    产率与样本复用率都由 stats['samples'] 推出来，多算就全错；
+    而丢弃量不打出来的话，配错了也没人知道 —— 这类静默失败本项目吃过很多次。
+    """
+    actor = make_actor(keep_last_plies=8, seed=7)
+    data = _run_until_samples(actor)
+    stats = actor.stats
+
+    assert stats["samples_dropped"] > 0, "窗口开着却一条都没丢，过滤没生效"
+    # drain 出来的条数不能超过 stats 记的产出数
+    assert data["count"] <= stats["samples"]
+
+
+def test_window_larger_than_any_game_drops_nothing():
+    """窗口大于任何一局的长度时，行为应与不开窗口一致。"""
+    actor = make_actor(keep_last_plies=10_000, seed=5)
+    _run_until_samples(actor)
+    assert actor.stats["samples_dropped"] == 0

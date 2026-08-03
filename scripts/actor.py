@@ -110,6 +110,7 @@ def main() -> int:
         temperature=tcfg.temperature,
         temperature_moves=tcfg.temperature_moves,
         raw_policy_fraction=tcfg.raw_policy_fraction,
+        keep_last_plies=tcfg.keep_last_plies,
         resign_enabled=tcfg.resign_enabled,
         resign_threshold=tcfg.resign_threshold,
         resign_audit_fraction=tcfg.resign_audit_fraction,
@@ -178,10 +179,17 @@ def main() -> int:
             else:
                 # 黑白和三项都打出来：连珠规则不对称（黑必须恰好五连、还有禁手约束），
                 # 只看黑胜率分不清「黑方在输」和「大量和棋」。
+                dropped = stats.get("samples_dropped", 0)
+                produced = stats["samples"] + dropped
+                # 尾段窗口丢掉了多少 —— 不打出来就没人知道它有没有按预期生效
+                window = (
+                    f"窗口丢弃 {dropped / max(1, produced):.1%}  " if dropped else ""
+                )
                 rates = (
                     f"{stats['completed_plies'] / games:.0f} 手/局  "
                     f"黑{stats['black_wins']}/白{stats['white_wins']}/和{stats['draws']}  "
                     f"禁手告负 {stats['forbidden_losses'] / games:.2%}  "
+                    f"{window}"
                     # 认输误判率必须盯着：价值头没训起来之前认输就是在瞎判，
                     # 会让训练数据里的价值目标整体走样
                     f"认输 {stats['resigns'] / games:.1%}"

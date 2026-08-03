@@ -300,6 +300,23 @@ void SelfPlayRunner::finish_game(Slot& slot, Outcome outcome, bool by_resign) {
     sample.next_move =
         (sample.ply + 1 < total_plies) ? moves[sample.ply + 1] : -1;
   }
+  // 尾段窗口：只留距终局 keep_last_plies 手以内的样本。
+  // 必须放在上面那个循环之后 —— plies_remaining 要等 total_plies 确定才算得出来。
+  if (cfg_.keep_last_plies > 0) {
+    const size_t before = slot.pending.size();
+    const int window = cfg_.keep_last_plies;
+    slot.pending.erase(
+        std::remove_if(slot.pending.begin(), slot.pending.end(),
+                       [window](const Sample& s) {
+                         return s.plies_remaining > window;
+                       }),
+        slot.pending.end());
+    slot.stats.samples_dropped +=
+        static_cast<int64_t>(before - slot.pending.size());
+  }
+
+  // stats.samples 统计的必须是**过滤后**的数量：样本产率、以及 trainer 那边
+  // 的样本复用率都由它推出来，多算就全错。
   slot.stats.samples += static_cast<int64_t>(slot.pending.size());
   slot.finished.insert(slot.finished.end(),
                        std::make_move_iterator(slot.pending.begin()),
@@ -372,6 +389,7 @@ Stats SelfPlayRunner::stats() const {
     total.moves += slot.stats.moves;
     total.completed_plies += slot.stats.completed_plies;
     total.samples += slot.stats.samples;
+    total.samples_dropped += slot.stats.samples_dropped;
     total.black_wins += slot.stats.black_wins;
     total.white_wins += slot.stats.white_wins;
     total.draws += slot.stats.draws;

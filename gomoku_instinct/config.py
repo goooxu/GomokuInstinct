@@ -65,6 +65,7 @@ def trainer_config_from(cfg: dict, **overrides):
         temperature=temperature.get("initial", 1.0),
         temperature_moves=temperature.get("moves", 16),
         raw_policy_fraction=selfplay.get("deployment_distribution_fraction", 0.25),
+        keep_last_plies=selfplay.get("keep_last_plies", 0),
         resign_enabled=resign.get("enabled", True),
         resign_threshold=resign.get("threshold", -0.92),
         resign_audit_fraction=resign.get("audit_fraction", 0.05),

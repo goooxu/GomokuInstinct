@@ -25,32 +25,9 @@ INVERSE_ON = "\033[7m"
 INVERSE_OFF = "\033[27m"
 
 
-class CoordinateError(ValueError):
-    pass
-
-
 def move_to_label(move: int, size: int) -> str:
     r, c = divmod(move, size)
     return f"{COLUMN_LETTERS[c]}{size - r}"
-
-
-def label_to_move(label: str, size: int) -> int:
-    text = label.strip().upper()
-    if len(text) < 2:
-        raise CoordinateError(f"看不懂的坐标: {label!r}")
-
-    column = COLUMN_LETTERS.find(text[0])
-    if column < 0 or column >= size:
-        raise CoordinateError(f"列超出范围: {text[0]}")
-
-    try:
-        row_number = int(text[1:])
-    except ValueError as exc:
-        raise CoordinateError(f"看不懂的行号: {text[1:]!r}") from exc
-    if not 1 <= row_number <= size:
-        raise CoordinateError(f"行超出范围: {row_number}")
-
-    return (size - row_number) * size + column
 
 
 def render_board(
@@ -92,23 +69,4 @@ def render_board(
         lines.append(f"{size - r:>{width}} " + " ".join(cells))
 
     lines.append(header)
-    return "\n".join(lines)
-
-
-def render_compact(grid, size: int, last_move: int | None = None) -> str:
-    """紧凑渲染，每格一列，用于日志与复盘。"""
-    width = len(str(size))
-    header = " " * (width + 1) + COLUMN_LETTERS[:size]
-    lines = [header]
-    for r in range(size):
-        row = []
-        for c in range(size):
-            idx = r * size + c
-            value = grid[idx]
-            row.append(
-                BLACK_STONE if value == BLACK
-                else WHITE_STONE if value == WHITE
-                else EMPTY_POINT
-            )
-        lines.append(f"{size - r:>{width}} " + "".join(row))
     return "\n".join(lines)

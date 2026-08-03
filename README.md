@@ -65,7 +65,7 @@ python scripts/train.py --run-dir runs/dev9 --board-size 9 \
     --override num_games=512 sims=96 batch_size=512 min_positions_to_start=3000
 ```
 
-## 人机对战（网页版）
+## 人机对战
 
 ```bash
 gomoku-instinct serve --ckpt <checkpoint> --port 8000
@@ -98,37 +98,6 @@ ssh -L 8000:127.0.0.1:8000 <开发机>     # 然后本地浏览器打开 http://
 
 `--host 0.0.0.0` 可以直接对同网段开放，风险自负。
 
-## 人机对战（命令行版）
-
-```bash
-gomoku-instinct play --color black --ckpt <checkpoint>
-```
-
-默认是**光标模式**：方向键（或 vim 的 `hjkl`）移动光标，回车/空格落子。当前坐标和该点
-状态（空点 / 你的禁手点 / 已有子）实时显示在棋盘下方 —— 15×15 上靠肉眼数格子报坐标
-很容易错行错列，落子前先确认比落错了再悔棋省事。
-
-| 按键 | 作用 |
-|---|---|
-| 方向键 / `hjkl` | 移动光标 |
-| 回车 / 空格 | 落子 |
-| `u` | 悔一回合（连同 AI 的应手一起退回） |
-| `i` | 让 AI 说说它怎么看当前局面（不落子） |
-| `s` / `o` | 存档 / 读档 |
-| `r` / `q` | 认输 / 退出 |
-
-输入被重定向时（管道、脚本）自动退回逐行输入坐标的模式，命令为
-`undo` / `hint` / `save` / `load` / `resign` / `quit`。
-
-常用选项：
-
-| 选项 | 说明 |
-|---|---|
-| `--color black\|white` | 人类执子颜色 |
-| `--input-mode auto\|cursor\|text` | 落子方式，默认 `auto`（是终端就用光标模式） |
-| `--show-policy` | 显示 AI 的 top-5 候选手概率、value 估计与禁手点预测 |
-| `--safe-mode` | 用规则给 AI 兜底屏蔽禁手点。**默认关闭** —— 开启后落子就不再是纯模型推理了 |
-
 ## 结构
 
 ```
@@ -141,7 +110,7 @@ gomoku_instinct/
   selfplay/        自博弈 actor 与批量推理
   train/           trainer、replay buffer、损失
   eval/            竞技场、Elo、规则基线对手
-  cli/             命令行入口与人机对战
+  cli/             命令行入口与零搜索对战引擎
   web/             网页版对战（标准库 http.server + 单页前端）
 scripts/           容器启动、训练编排、评测与剖析
 tests/             规则差分测试、优化器数值测试等

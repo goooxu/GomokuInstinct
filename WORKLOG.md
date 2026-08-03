@@ -896,3 +896,25 @@ renju15c（48,000 步）直接对局赢下此前那版，成为保留下来的�
 并提醒读者别把这几个读数当成一条平滑上升的曲线。
 
 **证据强度不该随讲述的方便而升级。**
+
+### 移除命令行对战
+
+`gomoku-instinct play` 及其光标模式整体删除：`cli/play.py`、`cli/cursor_play.py`、
+`cli/keyboard.py`、`tests/test_cursor_input.py`，以及 `main.py` 里的 play 子命令。
+`render.py` 里只有它用的 `label_to_move`、`CoordinateError`、`render_compact`
+也一并去掉。
+
+**这原本是项目最初的硬性要求之一**（"写一个命令行的工具，用来和人对战"），
+后来网页版在功能上完全覆盖了它，遂由用户决定移除。上面 M7 那两节记的是当时的开发过程，
+保留不动 —— 那些事确实发生过，包括 `tty.setraw` 默认 `TCSAFLUSH` 会丢掉已排队输入
+那个坑，以及"先量再改"撤掉禁手缓存那次自我纠正。**代码删了，教训不删。**
+
+删的时候要分清哪些是它专有、哪些是共用的：
+
+- `cli/engine.py`（`InstinctPlayer`）**必须留** —— 它是零搜索约束的落地点，
+  网页版和 `search_gap.py` 都依赖它；
+- `cli/render.py` 的 `move_to_label` 网页版在用、`render_board` 被 `show_game.py` 用，
+  也要留；
+- `cli/main.py` 还托管着 serve / arena / show 三个子命令，只能摘掉 play。
+
+删完 `cli/` 从 959 行降到 455 行。

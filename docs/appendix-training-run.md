@@ -209,8 +209,7 @@ argmax 几乎从不选禁手点，实战仍有 0.84% 踩雷 —— 差额来自�
 ## A.12 怎么用这个权重
 
 ```bash
-gomoku-instinct serve --ckpt runs/renju15c --port 8000     # 网页版
-gomoku-instinct play  --ckpt runs/renju15c --color black   # 命令行版
+gomoku-instinct serve --ckpt runs/renju15c --port 8000     # 网页版对战
 gomoku-instinct show  --ckpt runs/renju15c                 # 看 checkpoint 信息
 ```
 

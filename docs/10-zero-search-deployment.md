@@ -15,8 +15,7 @@ move   = int(torch.argmax(logits, dim=-1).item())       # temperature = 0
 就这些。**没有树搜索、没有 rollout、没有开局库、没有多步推演**，
 也没有"如果模型想走禁手就换一个"这类兜底。`analyze()` 返回什么，`game.play()` 就落什么。
 
-CLI 版和网页版**共用同一个 `InstinctPlayer`**，一字不差。换的只是界面，
-棋力逐手一致。
+网页版与竞技场评测**共用同一个 `InstinctPlayer`**，一字不差 —— 所以「页面上跟你下棋的」和「评测里报出那些胜率的」是同一套落子逻辑，逐手一致。
 
 ## 10.2 唯一的非模型逻辑
 
@@ -35,17 +34,14 @@ CLI 版和网页版**共用同一个 `InstinctPlayer`**，一字不差。换的�
 理由在第 1 章讲过：严格 RIF 语义下禁手点是合法落子，避开它是模型必须自己学会的能力。
 替它挡掉等于在推理时偷偷加了规则外挂 —— 而外挂正是"零搜索"这条约束要排除的东西。
 
-代价是真的会犯规。自博弈实测最终约 **0.70%**（早期峰值 6%，中途低点 0.09%~0.52%）。
+代价是真的会犯规。自博弈实测最终约 **0.84%**（训练早期一度到 6%）。不过那是**带搜索
+和温度采样**的自博弈；纯零搜索的竞技场对局共 600 局，禁手告负 **0 次**。
 **当人执白、AI 执黑时，它踩到禁手就是真的判负。**
 
 模型自己也有一个禁手点预测头（第 4 章），但那个输出**只用于显示**，
 从不参与选点，网页版甚至根本没把它发到前端。
 
-## 10.4 两个界面
-
-**命令行版**（`gomoku-instinct play`）默认是光标模式：方向键移动，回车落子，
-当前坐标和该点状态实时显示。之所以不用"敲坐标"，是因为 15×15 上靠肉眼数格子
-把点位翻译成坐标，错行错列是常态。
+## 10.4 对战界面
 
 **网页版**（`gomoku-instinct serve`）画的是真棋盘：鼠标悬停时先显示半透明的棋子，
 确认了再点；AI 每落一手会标出它给这一手的概率，以及**所有概率不低于阈值的其它候选点**
@@ -102,10 +98,9 @@ CLI 版和网页版**共用同一个 `InstinctPlayer`**，一字不差。换的�
 
 | 文件 | 符号 | 作用 |
 |---|---|---|
-| `gomoku_instinct/cli/engine.py` | `InstinctPlayer` | **零搜索约束的落地点**，CLI 与网页版共用 |
+| `gomoku_instinct/cli/engine.py` | `InstinctPlayer` | **零搜索约束的落地点**，网页版与竞技场共用 |
 | `gomoku_instinct/cli/engine.py` | `MoveAnalysis` | 一次落子决策的全部依据 |
 | `gomoku_instinct/model/features.py` | `legal_mask` | 那一行唯一的非模型逻辑 |
-| `gomoku_instinct/cli/cursor_play.py` | `run_cursor_game` | 方向键选点的交互循环 |
 | `gomoku_instinct/web/server.py` | `App` | 网页版服务端；推理固定在一条预热线程上 |
 | `gomoku_instinct/web/server.py` | `warmup` | 启动时先跑一次，把 cuBLAS 句柄建好 |
 | `tests/test_web_server.py` | `test_inference_stays_on_one_dedicated_thread` | 挡住 70 倍那个坑复发 |

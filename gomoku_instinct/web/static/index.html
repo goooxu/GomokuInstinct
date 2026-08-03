@@ -580,7 +580,8 @@ canvas.addEventListener("pointerdown", (ev) => {
   guard(() => api("/api/move", { sid: S.sid, move: p }));
 });
 
-// 键盘：方向键挪落点、回车落子，和 CLI 的光标模式保持一致的手感
+// 键盘：方向键挪落点、回车落子 —— 15×15 上靠鼠标点准一个交叉点并不容易，
+// 先挪光标再确认比点错了再悔棋省事
 document.addEventListener("keydown", (ev) => {
   if (!S) return;
   const N = S.size;

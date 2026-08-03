@@ -71,7 +71,7 @@ def trainer_config_from(cfg: dict, **overrides):
         capacity=replay.get("capacity_positions", 4_000_000),
         min_positions_to_start=replay.get("min_positions_to_start", 50_000),
         shard_size=replay.get("shard_positions", 65_536),
-        keep_shards=replay.get("disk_keep_shards", 400),
+        keep_shards=replay.get("disk_keep_shards", 800),
         blunder_threshold=(
             replay.get("blunder_mining", {}).get("value_gap_threshold", 0.15)
             if replay.get("blunder_mining", {}).get("enabled", False)

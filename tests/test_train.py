@@ -754,3 +754,56 @@ def test_restore_takes_the_newest_shards_across_all_actors(tmp_path):
         f"装回来的不是最新两轮，而是 {sorted(set(int(x) for x in got))}"
     # 每个序号恰好三片（三个 actor 各一），说明没有按 actor 倾斜
     assert sorted(int(x) for x in got).count(3) == 3 * shard
+
+
+def test_prune_keeps_the_newest_shards_across_all_actors(tmp_path):
+    """回收必须跨所有写入方、按时间删最旧的。
+
+    两个真实缺陷：
+    ① 原来按 self.shard_prefix 过滤，而多卡编排下 trainer 根本不写分片 ——
+       一个文件都匹配不上，回收从未执行过，磁盘无限增长。
+    ② 就算匹配上了，按文件名排序会先按 actor 分组，"删最旧的一批"
+       会把某个 actor 整个删光。
+    """
+    import numpy as np
+
+    from gomoku_instinct.train.replay import ReplayBuffer
+
+    size, n, shard = 5, 25, 10
+    shard_dir = tmp_path / "replay"
+    src = ReplayBuffer(10_000, size, shard_dir=str(shard_dir), shard_size=shard,
+                       keep_shards=0)
+    for idx in range(4):                       # 4 轮 × 3 actor = 12 片
+        for actor in range(3):
+            src.shard_prefix = f"actor{actor}"
+            src._shard_index = idx
+            src.add({
+                "boards": np.zeros((shard, n), np.uint8),
+                "policy": np.zeros((shard, n), np.float16),
+                "to_move": np.ones(shard, np.uint8),
+                "history": np.zeros((shard, 4), np.int32),
+                "move_number": np.full(shard, idx, np.int32),
+                "value": np.zeros(shard, np.float32),
+                "plies_remaining": np.zeros(shard, np.int32),
+                "next_move": np.zeros(shard, np.int32),
+                "root_value": np.zeros(shard, np.float32),
+                "blunder_gap": np.zeros(shard, np.float32),
+                "threat_self": np.zeros((shard, n), np.uint8),
+                "threat_opp": np.zeros((shard, n), np.uint8),
+                "forbidden": np.zeros((shard, n), np.uint8),
+            })
+    src.flush()
+    assert len(list(shard_dir.glob("*.npz"))) == 12
+
+    # trainer 侧：自己不写分片（前缀 shard_，目录里一个都没有），只负责回收
+    keeper = ReplayBuffer(1000, size, shard_dir=str(shard_dir), keep_shards=6)
+    keeper._prune_shards()
+
+    left = sorted(p.name for p in shard_dir.glob("*.npz"))
+    assert len(left) == 6, f"回收没有执行或删多了: {left}"
+    # 留下的必须是最新两轮（序号 2、3）的三个 actor 各一片
+    rounds = sorted(int(p.rsplit("_", 1)[1].split(".")[0]) for p in left)
+    assert set(rounds) == {2, 3}, f"删的不是最旧的，剩下 {rounds}"
+    actors = sorted(p.split("_")[0] for p in left)
+    assert actors.count("actor0") == 2 and actors.count("actor2") == 2, \
+        f"按 actor 删偏了: {actors}"

@@ -58,7 +58,9 @@ class TrainerConfig:
     capacity: int = 4_000_000
     min_positions_to_start: int = 50_000
     shard_size: int = 65_536
-    keep_shards: int = 400
+    # 必须大于「装满回放池所需的分片数」，否则续训时磁盘分片凑不够、
+    # 回放池永远恢复不到容量。见 configs/train_4gpu.yaml 里的说明。
+    keep_shards: int = 800
     label_workers: int = 16
     # 失误挖掘：把「零搜索会走错且错得厉害」的局面按比例塞进每个批次
     blunder_threshold: float = 0.0

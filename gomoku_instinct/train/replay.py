@@ -383,18 +383,39 @@ class ReplayBuffer:
         self._flush_shard()
 
     def _prune_shards(self) -> None:
+        """按时间回收最旧的分片，**跨所有写入方**。
+
+        多卡编排下每个 actor 各写各的前缀，且都配 `keep_shards=0`（不自己回收），
+        回收统一交给 trainer 做。原来这里按 `self.shard_prefix` 过滤，
+        而 trainer 在多卡模式下根本不写分片 —— 一个文件都匹配不上，
+        **回收实际从未发生**，磁盘无限增长。这正是分片总量超过窗口容量、
+        进而让装载顺序的错误显形的直接诱因。
+
+        排序同样必须按分片序号而不是文件名：按文件名排会先按 actor 分组，
+        "删最旧的一批"就变成把某个 actor 整个删光。
+        """
         if not self.shard_dir or self.keep_shards <= 0:
             return
-        shards = sorted(
-            f
-            for f in os.listdir(self.shard_dir)
-            if f.startswith(self.shard_prefix + "_")
-        )
+        try:
+            names = [
+                f
+                for f in os.listdir(self.shard_dir)
+                if f.endswith(".npz") and not f.endswith(".tmp.npz")
+            ]
+        except OSError:
+            return
+        shards = sorted(names, key=_shard_order)
+        removed = 0
         for name in shards[: max(0, len(shards) - self.keep_shards)]:
             try:
                 os.remove(os.path.join(self.shard_dir, name))
+                removed += 1
             except OSError:
                 pass
+        if removed:
+            # 回收是"悄悄发生"的事，不打出来就没人知道它到底有没有在工作
+            print(f"[replay] 回收 {removed} 个最旧分片，磁盘保留 {self.keep_shards} 个",
+                  flush=True)
 
     def resume_shard_index(self) -> int:
         """从磁盘上已有的同前缀分片接着编号。

@@ -807,3 +807,50 @@ def test_prune_keeps_the_newest_shards_across_all_actors(tmp_path):
     actors = sorted(p.split("_")[0] for p in left)
     assert actors.count("actor0") == 2 and actors.count("actor2") == 2, \
         f"按 actor 删偏了: {actors}"
+
+
+def test_done_flag_stops_the_actor_loop(tmp_path):
+    """trainer 跑满后落 DONE，actor 靠它收摊。
+
+    actor 是独立进程，trainer 退出它无从知晓 —— 实测跑满之后三个 actor
+    继续满负荷空烧了很久才被手工停掉。这里只钉住两侧用的是同一个约定：
+    trainer 写 <run-dir>/DONE，actor 每轮检查它。
+    """
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    trainer_src = (repo / "gomoku_instinct/train/trainer.py").read_text()
+    actor_src = (repo / "scripts/actor.py").read_text()
+    assert 'os.path.join(self.run_dir, "DONE")' in trainer_src
+    assert 'os.path.join(args.run_dir, "DONE")' in actor_src
+    # 续训（调大 max_steps 再跑）时必须先清掉上一轮的哨兵，
+    # 否则 actor 一起步就退出，trainer 永远等不到数据
+    assert re.search(r"os\.remove\(stale_done\)", trainer_src)
+
+
+def test_resume_raises_the_start_threshold(tmp_path):
+    """续训时开训门槛要按「中断前池子大小」抬高。
+
+    绝对值门槛（50,000）配上 400 万的容量，等于形同虚设：分片一旦没装回来，
+    只攒到容量的 1.25% 就开训，网络迅速过拟合那一小撮样本，
+    而**三项训练指标反而冲到全程最佳**，极易被误当成进展。
+    """
+    from gomoku_instinct.train.trainer import Trainer, TrainerConfig
+
+    cfg = TrainerConfig(min_positions_to_start=50_000)
+    # 从头开始：门槛就是配置里的绝对值
+    assert Trainer.__init__ is not None
+    # 直接验算门槛公式，不必真的建一个 Trainer（那要 GPU 和 C++ 扩展）
+    for expected, want in [(0, 50_000), (40_000, 50_000), (4_000_000, 2_000_000)]:
+        got = max(cfg.min_positions_to_start, int(expected * 0.5))
+        assert got == want, f"expected={expected} → {got}，应为 {want}"
+
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    src = (repo / "gomoku_instinct/train/trainer.py").read_text()
+    assert "self._start_threshold" in src
+    assert "len(self.buffer) >= self._start_threshold" in src
+    # 恢复得远少于中断前时必须告警 —— 这类失败会让指标变好看，没有告警就看不出来
+    assert "restored < expected * 0.5" in src

@@ -153,8 +153,9 @@ trainer 重启后内存里的回放池是空的，`min_positions_to_start = 50,0
 trainer 的空闲告警在这期间正确地报了"已连续 5 分钟没有吃到任何新样本，
 而 replay 目录里有 480 个分片"—— 检测机制生效了，但训练照样跑了。
 
-可改进之处（未做）：`min_positions_to_start` 是个绝对值，重启后应当要求回放池
-恢复到容量的某个比例再开训，否则这道门槛形同虚设。
+可改进之处（**后来已做**）：`min_positions_to_start` 是个绝对值，配上 400 万的容量
+形同虚设。现在续训时会拿 checkpoint 里记的池子大小做基准 —— 恢复不足一半就告警，
+开训门槛也随之抬高。
 
 ## A.8 自博弈的黑白失衡
 
@@ -203,7 +204,7 @@ gomoku-instinct show  --ckpt runs/renju15                 # 看 checkpoint 信�
 | `gomoku_instinct/train/trainer.py` | `TrainerConfig` | A.2 那张表里绝大多数默认值 |
 | `gomoku_instinct/train/trainer.py` | `save_checkpoint` | A.7 的续训靠它 |
 | `gomoku_instinct/train/replay.py` | `restore_from_shards` | 重启后从磁盘分片重建回放池 |
-| `configs/train_4gpu.yaml` | `min_positions_to_start` | A.7 那道形同虚设的门槛 |
+| `gomoku_instinct/train/trainer.py` | `_start_threshold` | A.7 那道门槛的修法：续训时按中断前池子大小抬高 |
 | `scripts/search_gap.py` | `main` | A.6 那张表的产出脚本 |
 
 回到 [目录](README.md)

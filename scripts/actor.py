@@ -138,8 +138,15 @@ def main() -> int:
     last_report = time.time()
     loaded_path = path
 
+    done_flag = os.path.join(args.run_dir, "DONE")
+
     while True:
         if args.max_seconds is not None and time.time() - started > args.max_seconds:
+            break
+        # trainer 跑满后会落这个文件。actor 是独立进程，否则无从知道训练已经结束，
+        # 会继续满负荷空烧 GPU（实测发生过两次，每次白烧三张卡）。
+        if os.path.exists(done_flag):
+            print(f"[{prefix}] 检测到 {done_flag}，训练已结束，收摊退出", flush=True)
             break
 
         actor.step()

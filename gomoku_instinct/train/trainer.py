@@ -184,6 +184,9 @@ class Trainer:
         self.rng = np.random.default_rng(cfg.seed)
         self._last_checkpoint_time = time.time()
         self._last_checkpoint_step = 0
+        # 开训门槛。从头开始时就是配置里的绝对值；续训时会在 load_checkpoint()
+        # 里按「中断前池子大小的一半」抬高，避免在被掏空的池子上过拟合。
+        self._start_threshold = cfg.min_positions_to_start
 
     # ── 训练 ────────────────────────────────────────────────────────────────
     def train_step(self) -> dict[str, float]:
@@ -251,6 +254,16 @@ class Trainer:
         started = time.time()
         log_path = os.path.join(self.run_dir, "logs", "metrics.jsonl")
 
+        # 上一轮留下的 DONE 哨兵必须先清掉。调大 max_steps 再续训时它还在的话，
+        # actor 会一起步就看到它、立刻退出，而 trainer 一直等不到数据。
+        stale_done = os.path.join(self.run_dir, "DONE")
+        if self.step < self.cfg.max_steps and os.path.exists(stale_done):
+            try:
+                os.remove(stale_done)
+                print(f"[trainer] 清掉上一轮的 {stale_done}", flush=True)
+            except OSError:
+                pass
+
         # 多卡模式下 actor 要等第一个 checkpoint 才能起步，所以先落一个。
         if self.cfg.external_selfplay and self.latest_checkpoint() is None:
             self.save_checkpoint()
@@ -289,7 +302,7 @@ class Trainer:
                         flush=True,
                     )
 
-            if len(self.buffer) >= self.cfg.min_positions_to_start:
+            if len(self.buffer) >= self._start_threshold:
                 steps = self.train_steps_for_cycle()
                 for _ in range(steps):
                     metrics = self.train_step()
@@ -302,6 +315,23 @@ class Trainer:
                 self.save_checkpoint()
 
         self.save_checkpoint()
+        if self.step >= self.cfg.max_steps:
+            self._signal_done()
+
+    def _signal_done(self) -> None:
+        """跑满后落一个哨兵文件，通知 actor 收摊。
+
+        actor 是独立进程，trainer 退出它无从知晓 —— 实测跑满之后三个 actor
+        继续满负荷空烧了很久才被手工停掉。`launch_training.sh` 的 stop 是纯手动的，
+        缺的就是这个信号。文件系统本来就是两侧唯一的耦合方式，用它最省事。
+        """
+        path = os.path.join(self.run_dir, "DONE")
+        try:
+            with open(path, "w") as fh:
+                fh.write(f"step={self.step}\n")
+            print(f"[trainer] 已落下 {path}，actor 会自行退出", flush=True)
+        except OSError as exc:
+            print(f"[trainer] 落 DONE 文件失败（actor 需手工停）：{exc}", flush=True)
 
     def _context_metrics(self, added: int) -> dict[str, float]:
         base = {
@@ -449,7 +479,27 @@ class Trainer:
         if self.actor is not None and rng.get("selfplay"):
             self.actor.set_rng_state(rng["selfplay"])
 
+        expected = int(state["buffer"].get("size", 0))
         restored = self.buffer.restore_from_shards()
+
+        # 回放池恢复得对不对，是续训里最容易静默出错的一件事：checkpoint 里存着
+        # 中断前的池子大小，这里一比就知道。历史上出过一次「分片全被跳过、
+        # 只攒到容量的 1.25% 就开训」，网络迅速过拟合那一小撮样本，
+        # 而**三项训练指标反而冲到全程最佳** —— 不比对的话没有任何迹象能看出来。
+        if expected > 0 and restored < expected * 0.5:
+            print(
+                f"[trainer] 警告：回放池只恢复到 {restored:,} 条，"
+                f"而中断前是 {expected:,} 条。"
+                "在偏小的池子上训练会迅速过拟合，而且**指标会变好看**，"
+                "极易被误当成进展。请检查 replay 目录里的分片是否还在。",
+                flush=True,
+            )
+        # 门槛按恢复情况取：从头开始时用绝对值（早点开训），
+        # 续训时至少要回到中断前的一半，否则宁可等 actor 把池子填回来。
+        self._start_threshold = max(
+            self.cfg.min_positions_to_start, int(expected * 0.5)
+        )
+
         self._last_checkpoint_time = time.time()
         self._last_checkpoint_step = self.step
         return True

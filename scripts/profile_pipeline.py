@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """拆解训练流水线里各步骤的耗时占比。
 
-    python scripts/profile_pipeline.py --run-dir runs/renju15
+    python scripts/profile_pipeline.py --run-dir runs/renju15c
 
 分两侧测：
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """查看一次训练的进展。
 
-    python scripts/report.py --run-dir runs/renju15
-    python scripts/report.py --run-dir runs/renju15 --arena 200
+    python scripts/report.py --run-dir runs/renju15c
+    python scripts/report.py --run-dir runs/renju15c --arena 200
 
 --arena 会额外跑一轮竞技场，给出对随机与规则基线的绝对棋力标尺。
 所有对局一律零搜索模式，与部署条件一致。

@@ -48,10 +48,10 @@ pytest tests/
 多卡编排：一张卡跑 trainer，其余卡各跑一个自博弈 actor。
 
 ```bash
-./scripts/launch_training.sh runs/renju15          # 启动（已有进度则自动续训）
-python scripts/report.py --run-dir runs/renju15    # 看进展
-python scripts/report.py --run-dir runs/renju15 --arena 200   # 顺带跑一轮竞技场
-./scripts/launch_training.sh runs/renju15 stop     # 停止
+./scripts/launch_training.sh runs/renju15c          # 启动（已有进度则自动续训）
+python scripts/report.py --run-dir runs/renju15c    # 看进展
+python scripts/report.py --run-dir runs/renju15c --arena 200   # 顺带跑一轮竞技场
+./scripts/launch_training.sh runs/renju15c stop     # 停止
 ```
 
 actor 与 trainer 之间只通过文件系统交互：actor 定期热加载 `checkpoints/latest`，
@@ -71,7 +71,7 @@ python scripts/train.py --run-dir runs/dev9 --board-size 9 \
 gomoku-instinct serve --ckpt <checkpoint> --port 8000
 
 # --ckpt 可以给多次，页面上就能切换；第一个是初始模型
-gomoku-instinct serve --ckpt runs/renju15c --ckpt runs/renju15 --port 8000
+gomoku-instinct serve --ckpt runs/renju15c --port 8000
 
 # 训练还在跑时加这个，每 60 秒自动换上最新 checkpoint，页面顶部的 step 会跟着走
 gomoku-instinct serve --ckpt runs/renju15c --reload-seconds 60
@@ -178,20 +178,26 @@ tests/             规则差分测试、优化器数值测试等
 
 ## 当前状态
 
-零搜索策略（单次前向 + argmax）的实测棋力：
+当前模型练了 48,000 步（`runs/renju15c`）。零搜索策略（单次前向 + argmax）的实测棋力，
+各 200 局、随机开局 2 子：
 
 | 对手 | 结果 |
 |---|---|
-| 随机落子 | 400胜 0负（Elo +1161），执黑执白各 200 局全胜，0 次禁手告负 |
-| 规则基线（贪心威胁） | 393胜 7负（得分率 98.2%，Elo +700） |
-| 同权重 MCTS | 约相当于个位数次模拟的搜索强度 |
+| 随机落子 | **200胜 0负**（得分率 100%，Elo +1040），0 次禁手告负 |
+| 规则基线（贪心威胁） | **199胜 1负**（得分率 99.5%，Elo +920） |
+| 同权重 MCTS | 约相当于**不到 2 次模拟**的搜索强度 |
 
-最后一项是本项目的头号指标，也是**尚未解决的核心问题**：AlphaZero 类方法的棋力
-一半来自搜索，把搜索从推理端拿掉后要靠权重补回来。目前压缩得有限。
+前两项已接近饱和，没有分辨力了；最后一项是本项目的头号指标，也是**尚未解决的核心
+问题**：AlphaZero 类方法的棋力一半来自搜索，把搜索从推理端拿掉后要靠权重补回来。
+目前几乎没有压缩进去。
 
-已经确认的一件事是：**这个差距不能靠「把访问分布拟合得更准」来缩小**。训练侧指标
-（策略损失相对目标熵的超出量、top1 一致率、价值准确率）持续改善的同时，
-搜索差距基本不动。详见 WORKLOG 中「M6/M7 收尾」一节。
+已经确认的一件事是：**这个差距不能靠「把访问分布拟合得更准」来缩小**。这一轮的
+训练侧指标全面优于此前任何一轮（策略损失相对目标熵的超出量 0.391，全项目最低），
+绝对棋力也确实更强，而搜索差距纹丝不动。
+
+关键在于**这个指标是相对的**：分母是模型自己的 MCTS，网络变强教师同样变强 ——
+训练让学生和老师一起进步，却没有缩短两者的距离，而部署时只有学生。
+完整论证见[技术报告第 12 章](docs/12-negative-result.md)。
 
 ## License
 

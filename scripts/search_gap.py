@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """测量本项目的头号指标：零搜索策略 vs 同权重 MCTS 的 Elo 差。
 
-    python scripts/search_gap.py --run-dir runs/renju15 --games 200 --sims 800
+    python scripts/search_gap.py --run-dir runs/renju15c --games 200 --sims 800
 
 整个方案赌的是「能把搜索压进权重里」。AlphaZero 类方法的棋力一半来自网络、
 一半来自树搜索；把搜索从推理端拿掉后，原始策略通常远弱于它自己的 MCTS 版本。

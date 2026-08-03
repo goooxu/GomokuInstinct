@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """跑一局对局并打印棋谱，用于人工复盘。
 
-    python scripts/show_game.py --run-dir runs/renju15 --opponent greedy
+    python scripts/show_game.py --run-dir runs/renju15c --opponent greedy
 
 模型一律以零搜索模式出手（单次前向 + argmax），与实际部署一致。
 """

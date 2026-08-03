@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """独立的自博弈 actor 进程：独占一张 GPU 产出训练样本。
 
-    python scripts/actor.py --run-dir runs/renju15 --actor-id 0
+    python scripts/actor.py --run-dir runs/renju15c --actor-id 0
 
 它做三件事，循环往复：
 

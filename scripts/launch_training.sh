@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 多卡训练编排：一张卡跑 trainer，其余卡各跑一个自博弈 actor。
 #
-#   ./scripts/launch_training.sh runs/renju15          # 启动（已有进度则自动续训）
-#   ./scripts/launch_training.sh runs/renju15 status   # 看谁在跑
-#   ./scripts/launch_training.sh runs/renju15 stop     # 停止
+#   ./scripts/launch_training.sh runs/renju15c          # 启动（已有进度则自动续训）
+#   ./scripts/launch_training.sh runs/renju15c status   # 看谁在跑
+#   ./scripts/launch_training.sh runs/renju15c stop     # 停止
 #
 # actor 与 trainer 之间除了文件系统没有任何耦合 —— 任一侧崩了另一侧照常跑，
 # 重启后各自从最新状态接上。

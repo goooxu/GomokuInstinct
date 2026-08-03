@@ -2,7 +2,7 @@
 """训练入口。默认自动续训。
 
     # 从头开始（或接着上次跑）
-    python scripts/train.py --run-dir runs/renju15
+    python scripts/train.py --run-dir runs/renju15c
 
     # 9x9 快速验证全链路
     python scripts/train.py --run-dir runs/dev9 --board-size 9 \

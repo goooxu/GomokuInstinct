@@ -648,7 +648,7 @@ def test_render_models_never_mutates_the_model_list():
 
     「哪个模型在用」是服务端全局状态，MODELS 只是某一次请求的快照，
     两边短暂不同步是常态。render 里只要有一句写回去，就会留下**永久**脏值 ——
-    实测表现是 renju15b 顶着 renju15 的 step 30,012 显示，刷新都不一定好。
+    实测表现是某个模型顶着另一个模型的 step 显示，刷新都不一定好。
     这和 #11 号（render() 抹掉用户刚选的颜色）是同一个模式：render 只许读、不许写。
     """
     import re

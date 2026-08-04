@@ -958,3 +958,52 @@ def _server_source() -> str:
     from gomoku_instinct.web import server as srv
 
     return inspect.getsource(srv)
+
+
+def test_opening_stones_land_in_one_5x5_window_inside_the_center(server):
+    """随机开局的子必须挤在中央 9×9 里的**同一个** 5×5 窗口内。
+
+    全盘均匀取的话，两颗子会被扔到棋盘两个角上，接下来几十手双方各下各的，
+    看着完全不像一盘棋。观战是给人看的，随机只需要提供多样性，不必是无信息的。
+    """
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    lo, hi = (SIZE - 9) // 2, (SIZE - 9) // 2 + 8      # 中央 9×9 的行列范围
+    for _ in range(30):
+        _, s = _watch(base, opening=4)
+        rc = [divmod(h["move"], SIZE) for h in s["history"]]
+        assert len(rc) == 4
+        rows, cols = [p[0] for p in rc], [p[1] for p in rc]
+        assert lo <= min(rows) and max(rows) <= hi, f"落到了中央 9×9 之外：{rc}"
+        assert lo <= min(cols) and max(cols) <= hi, f"落到了中央 9×9 之外：{rc}"
+        # 同一个 5×5 窗口 ⇒ 行跨度与列跨度都 < 5
+        assert max(rows) - min(rows) < 5, f"行跨度超出 5×5：{rc}"
+        assert max(cols) - min(cols) < 5, f"列跨度超出 5×5：{rc}"
+
+
+def test_opening_window_itself_varies(server):
+    """窗口本身要在中央区域里移动，否则每局都从同一小块开始。"""
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    corners = set()
+    for _ in range(40):
+        _, s = _watch(base, opening=2)
+        rc = [divmod(h["move"], SIZE) for h in s["history"]]
+        corners.add((min(p[0] for p in rc), min(p[1] for p in rc)))
+    assert len(corners) > 3, f"窗口几乎不动：{sorted(corners)}"
+
+
+def test_web_and_arena_share_one_opening_sampler():
+    """页面上看到的开局分布，必须就是评测里用的那个。
+
+    两边各写一份"中央 9×9 里取 5×5"的实现是行的，但那样它们会慢慢分叉，
+    而**分叉之后页面显示的开局不再代表评测条件**，谁也不会发现。
+    所以共用 `eval.opening.opening_moves` 一份实现，并在这里钉死。
+    """
+    import inspect
+
+    from gomoku_instinct.eval import arena
+    from gomoku_instinct.web import server as srv
+
+    assert "opening_moves(" in inspect.getsource(arena.play_match)
+    assert "opening_moves(" in inspect.getsource(srv.App.random_opening)

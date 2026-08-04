@@ -27,6 +27,7 @@ import torch
 
 from ..cli.engine import InstinctPlayer
 from ..cli.render import move_to_label
+from ..eval.opening import opening_moves
 from ..model.loader import load_model, resolve_checkpoint
 from ..rules import BLACK, WHITE, ForbiddenSemantics, Game, Outcome, RenjuRules
 
@@ -42,9 +43,11 @@ ANALYSIS_TOP_K = 100 // MIN_CANDIDATE_THRESHOLD_PCT
 MAX_SESSIONS = 64
 
 # 观战开局随机落子数。零搜索是确定性的，不随机开局的话每一局都是同一盘棋。
-# 默认 2 与竞技场 `play_match(random_opening_plies=2)` 一致。
+# 默认 2 与竞技场 `play_match(random_opening_plies=2)` 一致；
+# 落点规则也共用同一份实现（`eval/opening.py`）。
 DEFAULT_OPENING_PLIES = 2
 MAX_OPENING_PLIES = 8
+
 MAX_BODY = 1 << 20
 
 OUTCOME_NAMES = {
@@ -300,17 +303,14 @@ class App:
     def random_opening(self, session: Session, plies: int) -> None:
         """开局先随机落几子，让确定性的双方每局走出不同的棋。
 
-        随机是**在全部合法点上均匀取**，和竞技场 `play_match` 完全一致 ——
-        故意不带任何棋理，否则就是在用人的开局偏好替模型做选择。
+        落点由 `eval.opening.opening_moves` 给出，**与竞技场完全同一份实现** ——
+        页面上看到的开局分布，就是评测里用的那个。
         """
         game = session.game
-        for _ in range(plies):
+        for move in opening_moves(self.size, plies, self._opening_rng):
             if game.is_terminal():
                 break
-            legal = game.legal_moves()
-            if not legal:
-                break
-            game.play(self._opening_rng.choice(legal))
+            game.play(move)
         session.opening_plies = game.num_moves
 
     def ai_move(self, session: Session) -> None:

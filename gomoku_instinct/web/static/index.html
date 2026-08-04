@@ -632,7 +632,7 @@ function render() {
   $("meta").textContent = S.watching
     ? `● ${seatName(S.colors.black)} @${S.seats[S.colors.black].step.toLocaleString()}`
       + `　vs　○ ${seatName(S.colors.white)} @${S.seats[S.colors.white].step.toLocaleString()}`
-      + (S.opening > 0 ? `　开局 ${S.opening} 手随机` : "　无随机开局")
+      + (S.opening > 0 ? `　开局 ${S.opening} 手随机（中央 5×5 内）` : "　无随机开局")
     : `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手　零搜索`;
   // 切换失败时（比如两个模型棋盘尺寸不一样）下拉框要弹回真正生效的那个，
   // 否则页面显示的和实际在下棋的不是同一个模型。

@@ -15,6 +15,7 @@ import random
 from dataclasses import dataclass, field
 
 from ..rules import BLACK, WHITE, ForbiddenSemantics, Game, Outcome, RenjuRules
+from .opening import opening_moves
 
 
 @dataclass
@@ -80,6 +81,10 @@ def play_match(
     对弈时，若不这么做，每一局都是同一盘棋的重放，胜负完全由先后手决定，
     得分率会恒等于 50% —— 那是测量退化，不是势均力敌。零搜索策略与低模拟数
     MCTS 对打时尤其明显，因为后者基本就是跟着策略先验走。
+
+    落子位置取自 `opening.opening_moves`（与网页观战共用）：中央区域里的
+    一个小窗口，而不是全盘均匀。**这一条改过，新旧数字不可比** ——
+    详见 `eval/opening.py` 的模块说明。
     """
     rules = rules or RenjuRules()
     max_plies = max_plies or board_size * board_size
@@ -97,11 +102,10 @@ def play_match(
         game_index += count
         boards = [Game(board_size, rules, ForbiddenSemantics.LOSE) for _ in range(count)]
         for game in boards:
-            for _ in range(random_opening_plies):
-                legal = game.legal_moves()
-                if not legal or game.is_terminal():
+            for move in opening_moves(board_size, random_opening_plies, rng):
+                if game.is_terminal():
                     break
-                game.play(rng.choice(legal))
+                game.play(move)
         active = [i for i in range(count) if not boards[i].is_terminal()]
 
         while active:

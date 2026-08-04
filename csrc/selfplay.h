@@ -47,6 +47,26 @@ struct SelfPlayConfig {
   // 目的是让样本覆盖到部署时真正会走进去的局面，消除训练/部署的分布漂移。
   float raw_policy_fraction = 0.0f;
 
+  // 部署分布对局的随机开局手数。**这一项是必需的，不是可选项。**
+  //
+  // 零搜索落子是 argmax，是个确定性函数：同一份权重看到同一个局面必然给出同一手。
+  // 而这条路径又绕过了温度采样、用的是加噪之前的先验 —— 于是同时开局的部署分布
+  // 对局会走出**完全一样的棋**。实测（固定权重、64 局部署分布对局）：
+  // 912 条样本里只有 20 个不重复局面，2.2% —— 64 局就是同一盘棋。
+  // 对照组（同样配置、部署分布关掉）是 96.8%。
+  //
+  // 后果不只是浪费算力：那一小撮局面在回放池里被严重超额加权。
+  // renju15f 早期真实分片实测重复率约 26%，与 raw_policy_fraction=0.25 吻合。
+  //
+  // 开局用与竞技场、网页观战同一套规则（中央区域里的一个小窗口）。
+  // 这样"零搜索策略从第 k 手起接管"的语义不变，而局面各不相同。
+  int raw_policy_opening_plies = 0;
+
+  // 随机开局落在哪：中央 center_region 见方里的一个 opening_window 见方的窗口。
+  // 与 gomoku_instinct/eval/opening.py 保持一致（那边是评测与网页用的同一规则）。
+  int center_region = 9;
+  int opening_window = 5;
+
   // 尾段重搜（两趟走）：对局照常走完，**落子过程中不产出任何样本**；
   // 终局后回头把最后 research_last_plies 个局面用满 sims 重新搜一遍，
   // 那次搜索的访问分布才是训练目标。0 = 关闭，走原来的边下边采。
@@ -177,6 +197,7 @@ class SelfPlayRunner {
   };
 
   void start_game(Slot& slot);
+  void play_random_opening(Slot& slot, int plies);
   void start_move(Slot& slot);
   void finish_move(Slot& slot);
   void finish_game(Slot& slot, Outcome outcome, bool by_resign);

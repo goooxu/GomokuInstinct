@@ -444,3 +444,82 @@ def test_window_larger_than_the_game_takes_everything():
     plies = data["plies_remaining"][: data["count"]]
     # 覆盖到开局，说明窗口没有被错误地截断
     assert plies.max() > 20
+
+
+# ── 部署分布对局不能重放同一盘棋 ────────────────────────────────────────────
+
+
+class _FixedNet:
+    """固定权重的确定性打分器：先验只由局面决定，且非退化。
+
+    不能用 UniformEvaluator —— 均匀先验下 argmax 全是并列，
+    退化成"永远选下标最小的空点"，测不出真实情形。
+    """
+
+    def __init__(self, size: int, seed: int = 0) -> None:
+        n = size * size
+        rng = np.random.default_rng(seed)
+        self.w = rng.standard_normal((n, n)).astype(np.float32)
+        self.b = rng.standard_normal(n).astype(np.float32)
+
+    def __call__(self, boards, to_move, history, move_number):
+        legal = boards == EMPTY
+        s = boards.astype(np.float32) @ self.w + self.b
+        s = np.exp(s - s.max(axis=1, keepdims=True)) * legal
+        total = s.sum(axis=1, keepdims=True)
+        policy = np.divide(s, np.maximum(total, 1e-9)).astype(np.float32)
+        return policy, np.zeros(boards.shape[0], dtype=np.float32)
+
+
+def _unique_ratio(**kwargs) -> float:
+    """跑一批自博弈，返回产出样本里不重复局面的比例。"""
+    actor = SelfPlayActor(
+        _FixedNet(SIZE), board_size=SIZE, num_games=32, sims=24, fast_sims=8,
+        full_search_prob=0.25, temperature_moves=4, num_threads=4, seed=1234,
+        resign_enabled=False, research_last_plies=20, **kwargs
+    )
+    for _ in range(4000):
+        actor.step()
+        if actor.pending_samples > 600:
+            break
+    data = actor.drain(4000)
+    count = data["count"]
+    assert count > 0
+    boards = data["boards"][:count].reshape(count, -1)
+    return len({row.tobytes() for row in boards}) / count
+
+
+def test_raw_policy_games_without_opening_replay_one_game():
+    """没有随机开局时，部署分布对局全都是同一盘棋 —— 锁住这个前提。
+
+    零搜索落子是 argmax，是确定性函数；这条路径还绕过温度采样、
+    用的是加噪之前的先验。所以同时开局的这类对局必然一模一样。
+    这条测试断言的是**缺陷本身**：它一旦"失败"，说明有人顺手改了那条路径，
+    下面那条测试也就失去了意义，得一起重新想。
+    """
+    assert _unique_ratio(raw_policy_fraction=1.0, raw_policy_opening_plies=0) < 0.2
+
+
+def test_random_opening_makes_raw_policy_games_distinct():
+    """加上随机开局之后，部署分布对局各不相同。"""
+    assert _unique_ratio(raw_policy_fraction=1.0, raw_policy_opening_plies=2) > 0.9
+
+
+def test_production_mix_is_as_diverse_as_pure_mcts():
+    """生产配比（25% 部署分布）下的多样性要追平纯 MCTS。
+
+    实测：修复前 74%，修复后 97.8%，纯 MCTS 对照 96.8%。
+    """
+    mixed = _unique_ratio(raw_policy_fraction=0.25, raw_policy_opening_plies=2)
+    pure = _unique_ratio(raw_policy_fraction=0.0)
+    assert mixed > 0.9, f"混合配比多样性掉了：{mixed:.1%}"
+    assert mixed > pure - 0.05, f"混合 {mixed:.1%} 明显低于纯 MCTS {pure:.1%}"
+
+
+def test_raw_policy_opening_defaults_to_off():
+    """默认关闭：这个参数一旦默认生效，会悄悄改变所有既有用法。"""
+    from gomoku_instinct.core import load_core
+
+    core = load_core()
+    runner = core.SelfPlayRunner(board_size=SIZE, num_games=2)
+    assert runner is not None  # 构造得出来即说明默认值合法

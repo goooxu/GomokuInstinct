@@ -32,6 +32,54 @@ from gomoku_instinct.model.loader import load_model  # noqa: E402
 from gomoku_instinct.selfplay import ModelEvaluator, SelfPlayActor  # noqa: E402
 from gomoku_instinct.train.replay import ReplayBuffer  # noqa: E402
 
+# 审计窗口：只记最近这么多个局面的指纹。全程累积会无限涨内存，
+# 而且越到后面越不敏感 —— 要抓的是"最近产出的这批里有多少重复"。
+_UNIQ_WINDOW = 200_000
+
+
+# 只统计这一手之后的局面。**这个门槛是这个计数器的全部要害。**
+#
+# 第一版统计的是全部样本，结果被**局长**主导而不是被重复主导：
+# 开局那几手在几千局之间本来就高度重复（空盘、一子、两子），
+# 局越短、重搜窗口回溯得越靠前，这个比例就越低 —— 与要抓的东西无关。
+#
+# 实测两份数据，总计都是 ~74%，含义却完全相反：
+#
+#   手数区间     旧代码（有缺陷）   修复后
+#   0-4          69.6%            44.0%
+#   5-9          97.9%            73.3%
+#   10-19        99.7%            87.2%
+#   20+          68.3%  ← 重复    99.5%  ← 干净
+#
+# 缺陷的签名在**残局**（整局相同 ⇒ 残局局面重复），而开局的重复是良性的。
+# 所以只看 20 手之后。
+_DEEP_PLY = 20
+
+
+def _tally_unique(drained: dict, acc: dict) -> None:
+    """统计这批样本里有多少个不重复局面（只算 20 手之后的）。
+
+    只存局面的哈希（8 字节），不存局面本身。滑动窗口满了就整体清空重来 ——
+    LRU 精确淘汰不值那个复杂度，这个数只用来发现"明显不对劲"。
+    """
+    count = int(drained.get("count", 0))
+    if count <= 0:
+        return
+    boards = drained["boards"][:count].reshape(count, -1)
+    plies = drained["move_number"][:count]
+    seen = acc["seen"]
+    if len(seen) > _UNIQ_WINDOW:
+        seen.clear()
+        acc["total"] = acc["unique"] = 0
+    for row, ply in zip(boards, plies):
+        if ply < _DEEP_PLY:
+            continue
+        key = hash(row.tobytes())
+        acc["total"] += 1
+        if key not in seen:
+            seen.add(key)
+            acc["unique"] += 1
+
 
 def latest_checkpoint(run_dir: str) -> str | None:
     pointer = os.path.join(run_dir, "checkpoints", "latest")
@@ -110,6 +158,7 @@ def main() -> int:
         temperature=tcfg.temperature,
         temperature_moves=tcfg.temperature_moves,
         raw_policy_fraction=tcfg.raw_policy_fraction,
+        raw_policy_opening_plies=tcfg.raw_policy_opening_plies,
         research_last_plies=tcfg.research_last_plies,
         resign_enabled=tcfg.resign_enabled,
         resign_threshold=tcfg.resign_threshold,
@@ -134,6 +183,9 @@ def main() -> int:
     first_index = sink.resume_shard_index()
     print(f"[{prefix}] 分片从 #{first_index} 开始写", flush=True)
 
+    # 审计：产出样本里有多少个不重复局面。只留哈希，不留局面本身。
+    uniq = {"total": 0, "unique": 0, "seen": set()}
+
     started = time.time()
     last_reload = time.time()
     last_report = time.time()
@@ -153,7 +205,9 @@ def main() -> int:
         actor.step()
 
         if actor.pending_samples >= args.shard_size // 2:
-            sink.add_from_drain(actor.drain(), rules)
+            drained = actor.drain()
+            _tally_unique(drained, uniq)
+            sink.add_from_drain(drained, rules)
 
         now = time.time()
         if now - last_reload >= args.reload_every_seconds:
@@ -182,6 +236,18 @@ def main() -> int:
                 # 每局产多少条样本。两趟走时它应当稳定等于 min(窗口, 局长)，
                 # 偏离就说明重搜没按预期跑 —— 不打出来没人会发现。
                 window = f"{stats['samples'] / games:.1f} 条/局  "
+                # 不重复局面比例。**这是个审计计数器，不是好看的指标。**
+                # 它一旦明显低于 100%，说明有一批对局在重放同一盘棋 ——
+                # 部署分布对局就这么栽过（零搜索是 argmax，确定性函数，
+                # 同时开局就走出完全一样的棋；实测重复率约 26%，与其占比吻合）。
+                # 这个数字要是当初就在日志里，那个 bug 一个月前就该被发现。
+                # 样本太少时不打百分比 —— 那会把"没有数据"画成"灾难性重复"，
+                # 和上面那个"9400 手/局"是同一类假数字。
+                # 训练早期局短，20 手之后的样本本来就少，要等一阵才有数。
+                window += (
+                    f"深局面不重复 {uniq['unique'] / uniq['total']:.1%}  "
+                    if uniq["total"] >= 500 else "深局面不重复 —  "
+                )
                 rates = (
                     f"{stats['completed_plies'] / games:.0f} 手/局  "
                     f"黑{stats['black_wins']}/白{stats['white_wins']}/和{stats['draws']}  "

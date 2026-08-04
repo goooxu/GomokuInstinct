@@ -62,7 +62,41 @@ void SelfPlayRunner::start_game(Slot& slot) {
   if (slot.raw_policy_game) slot.stats.raw_policy_games += 1;
   if (slot.disable_resign) slot.stats.resign_audits += 1;
 
+  // 部署分布对局必须随机开局，否则同时开局的这类对局会走出完全一样的棋
+  // （零搜索是 argmax，确定性函数）。理由与实测数字见 selfplay.h。
+  if (slot.raw_policy_game && cfg_.raw_policy_opening_plies > 0) {
+    play_random_opening(slot, cfg_.raw_policy_opening_plies);
+  }
+
   start_move(slot);
+}
+
+// 在中央区域里随机取一个小窗口，把开局子都落在这个窗口内。
+// 一局只取**一个**窗口 —— 子散在中央各处的话它们彼此没有关系，等于没开局。
+// 规则与 gomoku_instinct/eval/opening.py 一致（竞技场与网页观战用的那套）。
+void SelfPlayRunner::play_random_opening(Slot& slot, int plies) {
+  const int size = cfg_.board_size;
+  const int region = std::min(cfg_.center_region, size);
+  const int window = std::min(cfg_.opening_window, region);
+  const int lo = (size - region) / 2;
+  const int hi = lo + region - window;
+
+  std::uniform_int_distribution<int> corner(lo, hi);
+  const int r0 = corner(slot.rng);
+  const int c0 = corner(slot.rng);
+
+  std::vector<int> pool;
+  pool.reserve(static_cast<size_t>(window) * window);
+  for (int dr = 0; dr < window; ++dr) {
+    for (int dc = 0; dc < window; ++dc) pool.push_back((r0 + dr) * size + c0 + dc);
+  }
+  std::shuffle(pool.begin(), pool.end(), slot.rng);
+
+  const int take = std::min<int>(plies, static_cast<int>(pool.size()));
+  for (int i = 0; i < take; ++i) {
+    if (slot.pos->outcome() != Outcome::ONGOING) break;
+    slot.pos->play(pool[i]);
+  }
 }
 
 void SelfPlayRunner::start_move(Slot& slot) {

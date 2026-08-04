@@ -169,7 +169,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                        float full_search_prob, float c_puct, float fpu_reduction,
                        float dirichlet_alpha, float dirichlet_eps,
                        float temperature, int temperature_moves,
-                       float raw_policy_fraction, int research_last_plies,
+                       float raw_policy_fraction, int raw_policy_opening_plies,
+                       int research_last_plies,
                        bool resign_enabled,
                        float resign_threshold, float resign_audit_fraction,
                        int num_threads, uint64_t seed, int forbidden_semantics,
@@ -185,6 +186,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
              cfg.temperature = temperature;
              cfg.temperature_moves = temperature_moves;
              cfg.raw_policy_fraction = raw_policy_fraction;
+             cfg.raw_policy_opening_plies = raw_policy_opening_plies;
              cfg.research_last_plies = research_last_plies;
              cfg.resign_enabled = resign_enabled;
              cfg.resign_threshold = resign_threshold;
@@ -206,6 +208,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            py::arg("dirichlet_eps") = 0.25f, py::arg("temperature") = 1.0f,
            py::arg("temperature_moves") = 16,
            py::arg("raw_policy_fraction") = 0.0f,
+           py::arg("raw_policy_opening_plies") = 0,
            py::arg("research_last_plies") = 0,
            py::arg("resign_enabled") = true,
            py::arg("resign_threshold") = -0.92f,

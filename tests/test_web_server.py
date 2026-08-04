@@ -624,7 +624,7 @@ def test_models_are_loaded_lazily(monkeypatch):
     _, session = app.new_session(BLACK)
     app.use_model(session, 1)
     assert sorted(app._players) == [0, 1]
-    assert app.meta_for(1)["step"] == 77
+    assert app.step_of(1) == 77
 
 
 def test_use_model_rejects_other_board_size(monkeypatch):
@@ -750,3 +750,211 @@ def test_board_never_exceeds_its_container():
     body = _strip_comments(_function_body(_page(), "function resize()"))
     bad = re.findall(r"Math\.max\(\s*(\d+)", body)
     assert all(int(n) <= 1 for n in bad), f"棋盘尺寸被抬到了固定下限: {bad}"
+
+
+# ── 观战：两个模型互下 ──────────────────────────────────────────────────────
+
+
+def test_watch_game_has_no_human_seat(server):
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
+    status, s = post(base, "/api/new", {"watch": {"black": 0, "white": 1}})
+    assert status == 200
+    assert s["watching"] is True
+    assert s["human"] == 0          # 没有人类座位
+    # 开局只有随机落的那几手，服务端不替模型走第一手 —— 模型的第一手也要看得见
+    assert len(s["history"]) == s["opening"]
+    assert s["seats"]["1"]["id"] == 0 and s["seats"]["2"]["id"] == 1
+
+
+def test_step_advances_exactly_one_move(server):
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
+    _, s = post(base, "/api/new", {"watch": {"black": 0, "white": 0}})
+    base_plies = len(s["history"])          # 随机开局那几手
+    for i in (1, 2, 3):
+        status, s = post(base, "/api/step", {"sid": s["sid"]})
+        assert status == 200
+        assert len(s["history"]) == base_plies + i, "一次 step 必须只走一手"
+
+
+def test_step_rejected_outside_watch_mode(server):
+    """人机对战里不能用单步推进 —— 否则会替人类那一方落子。"""
+    base, _ = server
+    _, s = post(base, "/api/new", {"color": "black"})
+    status, err = post(base, "/api/step", {"sid": s["sid"]})
+    assert status == 409 and "观战" in err["error"]
+
+
+def test_watch_rejects_unknown_model(server):
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    status, _ = post(base, "/api/new", {"watch": {"black": 0, "white": 9}})
+    assert status == 404
+
+
+def test_watch_selects_are_never_written_back_by_render():
+    """观战的两个模型下拉框是「下一局用谁」的输入控件，render 不得回写。
+
+    这和 #11（render 抹掉用户刚选的颜色）是同一条不变量：
+    回写会让用户刚选的对阵在被读到之前被覆盖掉。
+    """
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function render()"))
+    assert not re.findall(r'\$\("m(Black|White)"\)\.value\s*=(?!=)', body)
+    assert not re.findall(r'\$\("pace"\)\.value\s*=(?!=)', body)
+
+
+def test_unloaded_model_does_not_borrow_another_models_step(server):
+    """还没载入的模型，步数不能拿已载入那个的顶替。
+
+    原来 `meta_for` 写成 `self._metas.get(index, self._metas[0])`：观战一开局
+    两边都还没走，白方就被报成了黑方的步数 —— 名字是对的、数字是别人的，
+    拼出来的东西看着完全合理。#17 就是这个形状。
+    """
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
+    assert app.meta["step"] == 42 and 1 not in app._metas   # 只有 0 号载入了
+    _, s = post(base, "/api/new", {"watch": {"black": 0, "white": 1}})
+    assert s["seats"]["1"]["step"] == 42
+    assert s["seats"]["2"]["step"] != 42, "未载入的模型借用了别人的步数"
+
+
+def test_play_mode_step_follows_the_sessions_own_model(server):
+    """人机对战同理：选了 1 号却还没走第一手时，step 不能显示 0 号的。"""
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}, {"name": "b", "path": "B"}]
+    _, s = post(base, "/api/new", {"color": "black", "model": 1})
+    assert s["model"]["id"] == 1 and s["step"] != 42
+
+
+# ── 观战：随机开局 ─────────────────────────────────────────────────────────
+
+
+def _watch(base, **extra):
+    body = {"watch": {"black": 0, "white": 0, **extra}}
+    return post(base, "/api/new", body)
+
+
+def test_watch_games_are_not_all_the_same_game(server):
+    """两个确定性 player 对弈，不随机开局的话每局都是同一盘棋的重放。
+
+    零搜索是 argmax、temperature=0 —— 同一个模型看到同一个局面必然给出同一手。
+    竞技场早就踩过（图鉴 #12：得分率恒等于 50%），解法是每局开头随机落 2 子。
+    观战一开始漏了这一层，实际表现就是"每局一模一样"。
+    """
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    openings = set()
+    for _ in range(6):
+        _, s = _watch(base)
+        openings.add(tuple(h["move"] for h in s["history"]))
+    assert len(openings) > 1, "六局开局全同 —— 随机开局没生效"
+
+
+def test_opening_plies_default_and_explicit(server):
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    _, s = _watch(base)
+    assert s["opening"] == 2 and len(s["history"]) == 2   # 与竞技场默认值一致
+    _, s = _watch(base, opening=5)
+    assert s["opening"] == 5 and len(s["history"]) == 5
+
+
+def test_opening_zero_means_the_same_game_every_time(server):
+    """0 是合法值：想反复看同一条棋路时，确定性正是要的东西。"""
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    seen = set()
+    for _ in range(3):
+        _, s = _watch(base, opening=0)
+        assert s["opening"] == 0 and len(s["history"]) == 0
+        for _ in range(4):
+            _, s = post(base, "/api/step", {"sid": s["sid"]})
+        seen.add(tuple(h["move"] for h in s["history"]))
+    assert len(seen) == 1, "不随机开局却走出了不同的棋 —— 落子不是确定性的？"
+
+
+def test_opening_out_of_range_rejected(server):
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    for bad in (-1, 9, "x"):
+        status, _ = _watch(base, opening=bad)
+        assert status == 400, f"opening={bad!r} 应当被拒"
+
+
+def test_opening_stones_are_distinguishable_from_model_moves(server):
+    """随机落的子必须能和模型下的子区分开 —— 否则会对着一手随机落子
+    琢磨"它为什么下这里"。状态里给出 opening 手数，前端据此打叉。"""
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    _, s = _watch(base, opening=3)
+    _, s = post(base, "/api/step", {"sid": s["sid"]})
+    assert s["opening"] == 3 and len(s["history"]) == 4
+
+
+def test_play_mode_has_no_random_opening(server):
+    """人机对战不能随机开局 —— 那是评测手段，不是给人下的。"""
+    base, _ = server
+    _, s = post(base, "/api/new", {"color": "black"})
+    assert s["opening"] == 0 and len(s["history"]) == 0
+
+
+def test_render_never_writes_the_opening_slider():
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function render()"))
+    assert not re.findall(r'\$\("opening"\)\.value\s*=(?!=)', body)
+
+
+def test_every_api_the_page_calls_actually_exists():
+    """页面调用的每一个 /api/ 路径，服务端都必须有对应的处理函数。
+
+    起因：给观战加随机开局时，前端已经在发 `opening` 参数，而服务端跑的还是
+    旧代码 —— 参数被整个忽略，页面看着一切正常（新控件在、请求 200），
+    只是"每局都一模一样"。**"前端变了"是最容易让人误以为"整个改动都生效了"的假信号。**
+
+    这条测试挡不住"忘了重启服务"（那是运行期的事），但能挡住更根本的一种：
+    前端调了一个服务端根本没有的接口。
+    """
+    import re
+
+    page = _page()
+    called = set(re.findall(r'api\("(/api/[a-z]+)"', page))
+    called |= set(re.findall(r'fetch\("(/api/[a-z]+)', page))
+    assert called, "没从页面里找到任何 /api/ 调用 —— 这条测试的抓取方式失效了"
+
+    src = _server_source()
+    served = set(re.findall(r'"(/api/[a-z]+)":', src))          # POST 路由表
+    served |= set(re.findall(r'path == "(/api/[a-z]+)"', src))  # GET 分支
+    missing = called - served
+    assert not missing, f"页面调了服务端没有的接口：{sorted(missing)}"
+
+
+def test_watch_payload_fields_are_all_read_by_the_server():
+    """页面在 watch 里发的每个字段，服务端都要真的读。
+
+    发了却没人读 = 静默忽略，正是"每局都一样"那个 bug 的形状。
+    """
+    import re
+
+    page = _page()
+    body = page[page.index("function newWatchGame"):]
+    body = body[:body.index("\n}")]
+    sent = set(re.findall(r"^\s*(\w+):", _strip_comments(body), re.M))
+    sent.discard("watch")
+    assert {"black", "white", "opening"} <= sent, f"抓到的字段不对：{sent}"
+
+    src = _server_source()
+    for field in sorted(sent):
+        assert f'watch["{field}"]' in src or f'watch.get("{field}"' in src, \
+            f"页面发了 watch.{field}，服务端一处都没读 —— 会被静默忽略"
+
+
+def _server_source() -> str:
+    import inspect
+
+    from gomoku_instinct.web import server as srv
+
+    return inspect.getsource(srv)

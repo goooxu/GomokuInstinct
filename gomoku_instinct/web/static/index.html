@@ -92,15 +92,59 @@
     <div id="status"></div>
     <div id="msg"></div>
 
-    <div class="row" id="modelRow" style="display:none">
-      <select id="model" style="flex:1 1 auto; min-width:0"></select>
-    </div>
     <div class="row">
-      <select id="color">
-        <option value="black">我执黑（先手）</option>
-        <option value="white">我执白（后手）</option>
+      <select id="mode" style="flex:1 1 auto; min-width:0">
+        <option value="play">人机对战</option>
+        <option value="watch">观战：模型互下</option>
       </select>
-      <button id="new">新局</button>
+    </div>
+
+    <div id="playPanel">
+      <div class="row" id="modelRow" style="display:none">
+        <select id="model" style="flex:1 1 auto; min-width:0"></select>
+      </div>
+      <div class="row">
+        <select id="color">
+          <option value="black">我执黑（先手）</option>
+          <option value="white">我执白（后手）</option>
+        </select>
+        <button id="new">新局</button>
+      </div>
+    </div>
+
+    <div id="watchPanel" style="display:none">
+      <div class="row">
+        <span style="width:2.4em">● 黑</span>
+        <select id="mBlack" style="flex:1 1 auto; min-width:0"></select>
+      </div>
+      <div class="row">
+        <span style="width:2.4em">○ 白</span>
+        <select id="mWhite" style="flex:1 1 auto; min-width:0"></select>
+      </div>
+      <div class="row">
+        <label class="chk" style="flex:1 1 auto; min-width:0">
+          每手停
+          <input type="range" id="pace" min="0" max="10" step="0.5" value="1.5"
+                 style="flex:1 1 60px; min-width:60px">
+          <span id="paceVal" style="width:3.4em; text-align:right">1.5s</span>
+        </label>
+      </div>
+      <div class="row">
+        <label class="chk" style="flex:1 1 auto; min-width:0">
+          开局随机
+          <input type="range" id="opening" min="0" max="8" step="1" value="2"
+                 style="flex:1 1 60px; min-width:60px">
+          <span id="openVal" style="width:3.4em; text-align:right">2 手</span>
+        </label>
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="manual"> 手动逐手</label>
+      </div>
+      <div class="row">
+        <button id="watchNew">开新局</button>
+        <button id="stepBtn">走一手</button>
+        <button id="pauseBtn">暂停</button>
+      </div>
     </div>
     <div class="row">
       <button id="undo">悔棋</button>
@@ -231,6 +275,18 @@ function renderModels() {
   // 实测表现是 renju15b 顶着 renju15 的 step 30,012 显示，而且再也不会自己恢复。
   // 这正是 #11 号静默失败（render() 抹掉用户刚选的颜色）的同一个模式：
   // **render 只许读、不许写。**
+  // 观战的两个下拉框独立于对局状态 —— 它们是「下一局用谁」的输入控件，
+  // 所以只在选项集合变化时重建，绝不按 S 回写（#11 那条不变量）。
+  for (const [id, seat] of [["mBlack", 1], ["mWhite", 2]]) {
+    const el = $(id);
+    if (el.options.length !== MODELS.length) {
+      const keep = el.value;
+      el.replaceChildren(...MODELS.map((m) => new Option(m.name, String(m.id))));
+      if (keep !== "") el.value = keep;
+      else if (S && S.seats && S.seats[seat]) el.value = String(S.seats[seat].id);
+    }
+  }
+
   const activeId = S && S.model ? S.model.id : -1;
   // 用 new Option 而不是拼 innerHTML —— 名字来自命令行给的路径，不该被当 HTML 解析。
   sel.replaceChildren(...MODELS.map((m) => {
@@ -239,6 +295,51 @@ function renderModels() {
     o.selected = m.id === activeId;
     return o;
   }));
+}
+
+// ── 观战：模型互下 ──────────────────────────────────────────────────────────
+//
+// 服务端只提供「走一手」，节奏完全由这里定 —— 自动模式就是"走一手 → 等 N 秒 →
+// 再走一手"，手动模式就是等按钮。两种模式共用同一条服务端接口，
+// 服务端不需要知道界面用的哪种节奏。
+
+let watchTimer = null;    // 待触发的下一手
+let watchOn = false;      // 自动推进是否开着
+
+const isWatch = () => $("mode").value === "watch";
+const pace = () => Number($("pace").value) * 1000;
+
+function stopWatch() {
+  watchOn = false;
+  if (watchTimer !== null) { clearTimeout(watchTimer); watchTimer = null; }
+}
+
+function scheduleNext() {
+  if (watchTimer !== null) { clearTimeout(watchTimer); watchTimer = null; }
+  if (!watchOn || $("manual").checked) return;
+  if (!S || S.outcome !== "ongoing") { watchOn = false; return; }
+  watchTimer = setTimeout(stepOnce, pace());
+}
+
+async function stepOnce() {
+  watchTimer = null;
+  if (!S || S.outcome !== "ongoing" || pending) return;
+  await guard(() => api("/api/step", { sid: S.sid }));
+  scheduleNext();
+}
+
+function newWatchGame() {
+  stopWatch();
+  guard(() => api("/api/new", {
+    watch: {
+      black: Number($("mBlack").value),
+      white: Number($("mWhite").value),
+      opening: Number($("opening").value),
+    },
+  })).then(() => {
+    // 手动模式下开局就停在那儿，等你点「走一手」
+    if (!$("manual").checked) { watchOn = true; scheduleNext(); }
+  });
 }
 
 async function loadModels() {
@@ -455,6 +556,26 @@ function draw() {
     ctx.fillText(pct(played.move_prob), cx(c), cy(r));
   }
 
+  // 随机开局落的子打个叉。**必须标出来** —— 那几手不是模型下的，
+  // 不标的话你会对着一手随机落子琢磨"它为什么下这里"。
+  if (S.opening > 0 && S.history) {
+    ctx.strokeStyle = "rgba(120,120,120,0.9)";
+    ctx.lineWidth = Math.max(1, cell * 0.045);
+    ctx.lineCap = "round";
+    const d = cell * 0.14;
+    for (let k = 0; k < S.opening && k < S.history.length; k++) {
+      const m = S.history[k].move;
+      const c = m % N, r = (m - c) / N;
+      ctx.strokeStyle = grid[m] === S.colors.black
+        ? "rgba(232,228,220,0.85)" : "rgba(90,90,90,0.9)";
+      ctx.beginPath();
+      ctx.moveTo(cx(c) - d, cy(r) - d); ctx.lineTo(cx(c) + d, cy(r) + d);
+      ctx.moveTo(cx(c) + d, cy(r) - d); ctx.lineTo(cx(c) - d, cy(r) + d);
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+  }
+
   // 最后一手：圈画在靠近子边缘处，好给中间的概率让出位置
   if (last !== null && last !== undefined && grid[last]) {
     const c = last % N, r = (last - c) / N;
@@ -478,15 +599,28 @@ function draw() {
 const isMyTurn = () =>
   S && S.outcome === "ongoing" && S.to_move === S.human && !pending;
 
+// 观战局里"你"这个字没有指代对象 —— 两边都是模型，胜负要报模型名。
+const seatName = (color) =>
+  (S.seats && S.seats[color] && S.seats[color].name) || "?";
+
 function statusText() {
   if (S.outcome !== "ongoing") {
     if (S.resigned !== null && S.resigned !== undefined) return "你认输了。";
     if (S.outcome === "draw") return "和棋。";
     const blackWon = S.outcome === "black_win";
-    const iWon = (blackWon ? S.colors.black : S.colors.white) === S.human;
     const bad = S.history.length && S.history[S.history.length - 1].forbidden;
     const why = bad ? "（禁手判负）" : "";
-    return (blackWon ? "黑胜" : "白胜") + why + " —— " + (iWon ? "你赢了。" : "AI 赢了。");
+    const head = (blackWon ? "黑胜" : "白胜") + why + " —— ";
+    if (S.watching) {
+      return head + seatName(blackWon ? S.colors.black : S.colors.white) + " 赢了。";
+    }
+    const iWon = (blackWon ? S.colors.black : S.colors.white) === S.human;
+    return head + (iWon ? "你赢了。" : "AI 赢了。");
+  }
+  if (S.watching) {
+    const who = seatName(S.to_move) + (S.to_move === S.colors.black ? "（黑）" : "（白）");
+    if (pending) return who + " 思考中……";
+    return "轮到 " + who + "　" + (watchOn ? "自动推进中" : "已暂停");
   }
   if (pending) return "AI 思考中……";
   return S.to_move === S.human ? "轮到你了。" : "AI 思考中……";
@@ -494,13 +628,25 @@ function statusText() {
 
 function render() {
   if (!S) return;
-  $("meta").textContent =
-    `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手　零搜索`;
+  // 观战时两边可能是不同的模型（甚至同一个模型的不同步数），只报一个 step 会误导
+  $("meta").textContent = S.watching
+    ? `● ${seatName(S.colors.black)} @${S.seats[S.colors.black].step.toLocaleString()}`
+      + `　vs　○ ${seatName(S.colors.white)} @${S.seats[S.colors.white].step.toLocaleString()}`
+      + (S.opening > 0 ? `　开局 ${S.opening} 手随机` : "　无随机开局")
+    : `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手　零搜索`;
   // 切换失败时（比如两个模型棋盘尺寸不一样）下拉框要弹回真正生效的那个，
   // 否则页面显示的和实际在下棋的不是同一个模型。
   renderModels();
-  // 这是个 <span>，不是输入控件 —— 写它不违反"render 不得回写输入控件"那条。
+  // 这些都是 <span> 或 style，不是输入控件 —— 不违反"render 不得回写输入控件"那条。
   $("thrVal").textContent = $("thr").value + "%";
+  $("paceVal").textContent = Number($("pace").value).toFixed(1) + "s";
+  $("openVal").textContent = $("opening").value + " 手";
+  const watching = !!(S && S.watching);
+  $("playPanel").style.display = watching ? "none" : "";
+  $("watchPanel").style.display = watching ? "" : "none";
+  $("stepBtn").disabled = !watching || S.outcome !== "ongoing" || pending;
+  $("pauseBtn").textContent = watchOn ? "暂停" : "继续";
+  $("pauseBtn").disabled = !watching || $("manual").checked;
   $("status").textContent = statusText();
   $("status").classList.toggle("over", S.outcome !== "ongoing");
 
@@ -622,6 +768,34 @@ $("model").onchange = () => {
   // 摆着同一个局面换个对手接着走，正是对比强弱最直接的用法。
   guard(() => api("/api/model", { sid: S.sid, id }));
 };
+$("mode").onchange = () => {
+  stopWatch();
+  if (isWatch()) newWatchGame();
+  else newGame();
+};
+$("watchNew").onclick = newWatchGame;
+$("stepBtn").onclick = () => { stopWatch(); stepOnce(); };
+$("pauseBtn").onclick = () => {
+  if (watchOn) stopWatch();
+  else { watchOn = true; scheduleNext(); }
+  render();
+};
+$("manual").onchange = () => {
+  // 切到手动就把待触发的那一手取消掉，否则会"手动模式下自己又走了一步"
+  if ($("manual").checked) stopWatch();
+  else if (S && S.watching && S.outcome === "ongoing") { watchOn = true; scheduleNext(); }
+  render();
+};
+$("opening").oninput = () => {
+  localStorage.setItem("gi_opening", $("opening").value);
+  render();   // 只更新旁边那个 <span>，下一局才生效
+};
+$("pace").oninput = () => {
+  localStorage.setItem("gi_pace", $("pace").value);
+  // 正在等的那一手按新节奏重排，不然改了要等下一手才生效
+  if (watchOn) scheduleNext();
+  render();
+};
 $("undo").onclick = () => guard(() => api("/api/undo", { sid: S.sid }));
 $("hint").onclick = () => guard(() => api("/api/hint", { sid: S.sid }));
 $("resign").onclick = () => guard(() => api("/api/resign", { sid: S.sid }));
@@ -646,6 +820,10 @@ window.addEventListener("resize", resize);
 // 只在这里写一次输入控件，render() 里绝不碰它。
 const savedThr = localStorage.getItem("gi_thr");
 if (savedThr) $("thr").value = savedThr;
+const savedPace = localStorage.getItem("gi_pace");
+if (savedPace) $("pace").value = savedPace;
+const savedOpening = localStorage.getItem("gi_opening");
+if (savedOpening !== null) $("opening").value = savedOpening;
 
 // 刷新时先试着接回本标签页原来那一局，接不上再开新的。
 async function boot() {
@@ -654,7 +832,15 @@ async function boot() {
     try {
       const st = await fetch("/api/state?sid=" + encodeURIComponent(saved))
         .then((r) => r.json());
-      if (st && typeof st.step === "number") { setState(st); return; }
+      if (st && typeof st.step === "number") {
+        setState(st);
+        // 接回来的要是观战局，模式下拉框得跟着对齐 —— 否则面板显示的是观战，
+        // 下拉框却写着"人机对战"。**只在这里写一次**，render() 里绝不碰
+        // （#11 那条不变量：渲染不写输入控件）。接回的局不自动跑，
+        // 刷新一下就自己动起来是很吓人的。
+        if (st.watching) $("mode").value = "watch";
+        return;
+      }
     } catch (err) { /* 接不回来就当新局开 */ }
   }
   await newGame();

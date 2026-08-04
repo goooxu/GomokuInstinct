@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import random
 import secrets
 import threading
 import time
@@ -39,6 +40,11 @@ ANALYSIS_TOP_K = 100 // MIN_CANDIDATE_THRESHOLD_PCT
 
 # 会话上限。超出后淘汰最旧的一局 —— 本地试玩工具，不做持久化。
 MAX_SESSIONS = 64
+
+# 观战开局随机落子数。零搜索是确定性的，不随机开局的话每一局都是同一盘棋。
+# 默认 2 与竞技场 `play_match(random_opening_plies=2)` 一致。
+DEFAULT_OPENING_PLIES = 2
+MAX_OPENING_PLIES = 8
 MAX_BODY = 1 << 20
 
 OUTCOME_NAMES = {
@@ -76,6 +82,19 @@ class Session:
         # 用哪个模型是**每局各自的事**，不是服务端全局的。开两个标签页就能让
         # 两个模型同时各下各的；也不会出现一个页面换了模型、另一个页面跟着变。
         self.model = model
+        # 观战模式：黑白各用一个模型（可以相同）。human 置 0 表示两边都是 AI。
+        # 用「颜色 → 模型下标」而不是两个字段，是为了让 ai_move 不必关心是哪种模式。
+        self.models: dict[int, int] = {}
+        # 开头有多少手是随机落的（观战用，见 _api_new）。
+        # 前端据此把那几颗子标出来 —— 不标的话你会把它们当成模型下的。
+        self.opening_plies = 0
+
+    def model_for(self, color: int) -> int:
+        return self.models.get(color, self.model)
+
+    @property
+    def watching(self) -> bool:
+        return self.human == 0
 
 
 class App:
@@ -102,6 +121,8 @@ class App:
         self._players: dict[int, InstinctPlayer] = {0: player}
         self._metas: dict[int, dict] = {0: meta}
         self.rules = RenjuRules()
+        # 观战开局用。故意**不设种子** —— 这里要的就是每局不一样。
+        self._opening_rng = random.Random()
         self.lock = threading.Lock()
         self.sessions: OrderedDict[str, Session] = OrderedDict()
         # 所有推理都赶到同一个长期存活的线程上跑。
@@ -156,8 +177,23 @@ class App:
     def analyze(self, game: Game, index: int = 0):
         return self._infer.submit(self._analyze_on_thread, game, index).result()
 
-    def meta_for(self, index: int) -> dict:
-        return self._metas.get(index, self._metas[0])
+    def step_of(self, index: int) -> int:
+        """第 index 个模型练到哪一步了。
+
+        **没载入时绝不能拿别的模型的 meta 顶替。** 这里原来写的是
+        `self._metas.get(index, self._metas[0])` —— 一个模型还没被载入，
+        页面上就显示成第一个模型的步数。观战一开局两边都还没走，白方
+        renju15f（实际 495 步）就被报成了 renju15c 的 47,958 步。
+        这正是 #17 那个 bug 的形状：**名字取自正确的来源，数字取自兜底的来源，
+        两半拼出来的东西看着完全合理。**
+
+        没载入就直接从盘上的 checkpoint 文件名读，和模型清单同一个来源，
+        两处不会各说各话。
+        """
+        meta = self._metas.get(index)
+        if meta is not None:
+            return int(meta.get("step", 0))
+        return _peek_step(self.sources[index]["path"]) or 0
 
     def warmup(self) -> None:
         """先在推理线程上跑一次空盘，把句柄建好，免得第一手卡一下。"""
@@ -241,13 +277,17 @@ class App:
             })
         return out
 
-    def new_session(self, human: int, model: int = 0) -> tuple[str, Session]:
-        if not 0 <= model < len(self.sources):
-            raise IndexError("没有这个模型")
+    def new_session(self, human: int, model: int = 0,
+                    models: dict[int, int] | None = None) -> tuple[str, Session]:
+        for idx in [model, *(models or {}).values()]:
+            if not 0 <= idx < len(self.sources):
+                raise IndexError("没有这个模型")
         while len(self.sessions) >= MAX_SESSIONS:
             self.sessions.popitem(last=False)
         sid = secrets.token_urlsafe(12)
         session = Session(self.size, self.rules, human, model)
+        if models:
+            session.models = dict(models)
         self.sessions[sid] = session
         return sid, session
 
@@ -257,12 +297,28 @@ class App:
             self.sessions.move_to_end(sid)
         return session
 
+    def random_opening(self, session: Session, plies: int) -> None:
+        """开局先随机落几子，让确定性的双方每局走出不同的棋。
+
+        随机是**在全部合法点上均匀取**，和竞技场 `play_match` 完全一致 ——
+        故意不带任何棋理，否则就是在用人的开局偏好替模型做选择。
+        """
+        game = session.game
+        for _ in range(plies):
+            if game.is_terminal():
+                break
+            legal = game.legal_moves()
+            if not legal:
+                break
+            game.play(self._opening_rng.choice(legal))
+        session.opening_plies = game.num_moves
+
     def ai_move(self, session: Session) -> None:
         """让 AI 走一手。调用方必须已持有锁。"""
         game = session.game
         if game.is_terminal() or session.resigned is not None:
             return
-        analysis = self.analyze(game, session.model)
+        analysis = self.analyze(game, session.model_for(game.to_move))
         session.analysis_color = game.to_move
         session.analysis = analysis
         game.play(analysis.move)
@@ -307,13 +363,22 @@ class App:
             "resigned": session.resigned,
             "forbidden": forbidden,
             "analysis": analysis,
-            # 这一局用的是哪个模型、它练到哪一步 —— 两者出自同一份数据，
-            # 页面据此渲染下拉框，"显示的"和"真正在下棋的"不可能对不上。
-            "step": self.meta_for(session.model).get("step", 0),
+            # 这一局用的是哪个模型、它练到哪一步 —— 都由 session 的选择算出来，
+            # 页面据此渲染，"显示的"和"真正在下棋的"不可能对不上。
+            "step": self.step_of(session.model),
             "model": {
                 "id": session.model,
                 "name": self.sources[session.model]["name"],
             },
+            # 观战模式：两边都是 AI，界面据此切换控件并驱动单步推进
+            "watching": session.watching,
+            "opening": session.opening_plies,
+            "seats": {
+                str(c): {"id": session.model_for(c),
+                         "name": self.sources[session.model_for(c)]["name"],
+                         "step": self.step_of(session.model_for(c))}
+                for c in (BLACK, WHITE)
+            } if session.watching else None,
             "history": [
                 {
                     "move": m,
@@ -421,6 +486,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/hint": self._api_hint,
             "/api/resign": self._api_resign,
             "/api/model": self._api_model,
+            "/api/step": self._api_step,
         }
         handler = handlers.get(path)
         if handler is None:
@@ -432,6 +498,42 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── 接口 ────────────────────────────────────────────────────────────
     def _api_new(self, payload: dict) -> None:
+        watch = payload.get("watch")
+        if watch is not None:
+            # 观战：两边都是 AI。human 置 0 表示没有人类座位。
+            if not isinstance(watch, dict):
+                self._json({"error": "watch 必须是对象"}, 400)
+                return
+            try:
+                models = {BLACK: int(watch["black"]), WHITE: int(watch["white"])}
+            except (KeyError, TypeError, ValueError):
+                self._json({"error": "watch 需要 black 与 white 两个模型 id"}, 400)
+                return
+            # **必须有随机开局，否则每一局都是同一盘棋的重放。**
+            # 零搜索落子是 argmax、temperature = 0 —— 确定性函数，
+            # 同一个模型看到同一个局面必然给出同一手，空盘开局只有唯一一条棋路。
+            # 竞技场早就踩过这个坑（图鉴 #12：得分率恒等于 50%），
+            # 那边的解法是每局开头随机落 2 子（`play_match` 的 random_opening_plies），
+            # 这里用同一套机制，默认值也一样。
+            # 设成 0 就是"每次都下同一盘"—— 想反复看同一条棋路时那才是要的。
+            try:
+                opening = int(watch.get("opening", DEFAULT_OPENING_PLIES))
+            except (TypeError, ValueError):
+                self._json({"error": "opening 必须是整数"}, 400)
+                return
+            if not 0 <= opening <= MAX_OPENING_PLIES:
+                self._json({"error": f"opening 只能是 0~{MAX_OPENING_PLIES}"}, 400)
+                return
+            try:
+                sid, session = self.app.new_session(0, models[BLACK], models)
+            except IndexError:
+                self._json({"error": "没有这个模型"}, 404)
+                return
+            self.app.random_opening(session, opening)
+            # 随机开局之后不自动走 —— 让界面按自己的节奏推进，模型的第一手也要看得见
+            self._json(self.app.state(sid, session))
+            return
+
         human = WHITE if str(payload.get("color", "black")).startswith("w") else BLACK
         model = payload.get("model", 0)
         if not isinstance(model, int):
@@ -445,6 +547,21 @@ class Handler(BaseHTTPRequestHandler):
         if human == WHITE:
             self.app.ai_move(session)  # AI 执黑先行
         self._json(self.app.state(sid, session))
+
+    def _api_step(self, payload: dict) -> None:
+        """观战模式下推进一手。
+
+        每次只走一手、由界面决定什么时候要下一手 —— 这样"每手停几秒"和
+        "手动点一下走一手"是同一套机制，服务端不需要知道界面用的哪种节奏。
+        """
+        session = self._session(payload)
+        if session is None:
+            return
+        if not session.watching:
+            self._json({"error": "只有观战模式能用单步推进"}, 409)
+            return
+        self.app.ai_move(session)
+        self._json(self.app.state(payload["sid"], session))
 
     def _api_model(self, payload: dict) -> None:
         """给**这一局**换模型。别的对局不受影响。"""

@@ -22,6 +22,10 @@
 #   GI_TRAINER_GPU  trainer 用哪张卡（默认 0）
 #   GI_ACTOR_GPUS   actor 用哪些卡（默认 "1 2 3"）
 #   GI_ACTOR_THREADS 每个 actor 的搜索线程数（默认按核数自动均分）
+#   GI_OVERRIDES    额外透传给 trainer 的 --override 项，空格分隔，
+#                   例如 GI_OVERRIDES="max_steps=52000"。
+#                   一次性实验用它，不要去改仓库里的 configs/*.yaml ——
+#                   那份配置是给「从头训一轮」用的，改了下一轮就错。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -100,12 +104,13 @@ launch() {
   disown
 }
 
+# shellcheck disable=SC2086
 launch trainer "$TRAINER_GPU" \
   python scripts/train.py \
     --run-dir "$RUN_DIR" \
     --board-size "$BOARD_SIZE" \
     --device cuda \
-    --override external_selfplay=true
+    --override external_selfplay=true ${GI_OVERRIDES:-}
 
 # 等 trainer 落出第一个 checkpoint，actor 才有权重可用
 echo "等待 trainer 写出第一个 checkpoint……"

@@ -1230,3 +1230,49 @@ def test_ui_time_estimate_is_based_on_rounds_not_sims():
     assert "leaves" in body, "耗时估算没有考虑一轮取几个叶子"
     assert "Math.ceil(sims / leaves)" in body, "没有按轮数估算"
     assert "sims * 0.011" not in page, "还留着按模拟数线性估算的旧公式"
+
+
+def test_new_game_keeps_the_selected_search_strength(server):
+    """**「界面写着 512 次模拟，AI 却落子如飞」。**
+
+    每开一局都新建 Session，而 Session.sims 原本回落到服务端默认（0）——
+    页面上选的档位在下一局悄悄失效，而下拉框还显示着它。
+    下拉框是输入控件，render() 按 #11 那条不变量不能回写去"纠正"显示，
+    所以只能反过来让服务端采纳它 —— 与 color、model 同一个模式。
+    """
+    base, _ = server
+    status, s = post(base, "/api/new", {"color": "black", "sims": 128})
+    assert status == 200 and s["sims"] == 128
+    _, s = post(base, "/api/new", {"color": "black"})
+    assert s["sims"] == 0, "不给就仍然用服务端默认，老用法不受影响"
+
+
+def test_new_game_rejects_a_sims_outside_the_menu(server):
+    base, _ = server
+    status, _ = post(base, "/api/new", {"color": "black", "sims": 7})
+    assert status == 400
+
+
+def test_frontend_sends_sims_when_starting_a_game():
+    """前端不发的话服务端接受了也没用 —— 两边都要有。"""
+    body = _strip_comments(_function_body(_page(), "const startGame"))
+    assert "sims" in body, "开新局没有带上搜索档位"
+
+
+def test_human_stone_shows_before_the_ai_replies():
+    """**「点了鼠标要等 AI 想完才看见自己的子」。**
+
+    /api/move 一次请求里同时做人落子与 AI 应手，只返回最终状态。
+    零搜索时 AI 23 毫秒，没人察觉；开了搜索要几秒，自己那颗子就一直不显示。
+
+    修法是本地先画出来。关键是**不去改 S** —— 改了之后请求失败得回滚，
+    回滚写错会留下一颗对不上服务端的幽灵子。所以单独存待确认的落点，
+    成功失败都只需清掉它。
+    """
+    page = _page()
+    assert "let pendingStone" in page
+    # 两条落子路径（鼠标、键盘回车）都要设
+    assert page.count("pendingStone = { move:") == 2, "有落子路径没设待确认落点"
+    # setState 与 guard 收尾都要清 —— 失败路径也必须清
+    assert "pendingStone = null" in _strip_comments(_function_body(page, "function setState"))
+    assert "pendingStone = null" in _strip_comments(_function_body(page, "async function guard"))

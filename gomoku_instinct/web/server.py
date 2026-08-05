@@ -618,11 +618,18 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(model, int):
             self._json({"error": "model 必须是整数"}, 400)
             return
+        # 页面上选的搜索档位要跟着新局走。不接受的话新会话会回落到服务端默认，
+        # 而下拉框还显示着刚才选的档位 —— 界面写着「512 次模拟」却落子如飞。
+        sims = payload.get("sims", self.app.default_sims)
+        if not isinstance(sims, int) or sims not in SIMS_CHOICES:
+            self._json({"error": f"sims 只能取 {list(SIMS_CHOICES)}"}, 400)
+            return
         try:
             sid, session = self.app.new_session(human, model)
         except IndexError:
             self._json({"error": "没有这个模型"}, 404)
             return
+        session.sims = sims
         if human == WHITE:
             self.app.ai_move(session)  # AI 执黑先行
         self._json(self.app.state(sid, session))

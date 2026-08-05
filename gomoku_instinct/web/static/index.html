@@ -252,8 +252,19 @@ async function api(path, body) {
   return data;
 }
 
+// 点下去到服务端返回之间，先在本地把这颗子画出来。
+//
+// `/api/move` 一次请求里同时做了「人落子」和「AI 应手」，只返回最终状态。
+// 零搜索时 AI 只要 23 毫秒，没人察觉；开了搜索要几百毫秒到几秒，
+// **自己那颗子就一直不显示**，像是点了没反应。
+//
+// 只存落点、**不去动 S** —— 动了之后请求失败就得回滚，而回滚写错会留下一颗
+// 对不上服务端的幽灵子。这样无论成功失败，清掉它就回到服务端的真相。
+let pendingStone = null;
+
 function setState(next) {
   S = next;
+  pendingStone = null;
   viewPly = null;
   // sessionStorage 是**按标签页**隔离的：每个标签页记住自己那一局，
   // 刷新不会把棋丢掉，而新开一个标签页就是新的一局。
@@ -273,6 +284,7 @@ async function guard(fn) {
     $("msg").textContent = err.message || String(err);
   } finally {
     pending = false;
+    pendingStone = null;   // 失败也要清：宁可让它消失，也不留一颗对不上的子
     render();
   }
 }
@@ -283,8 +295,16 @@ const selectedModel = () => {
   return v === "" || v === null ? 0 : Number(v);
 };
 
+// 开新局时把**当前选的搜索档位**一起发过去。
+//
+// 不发的话新会话会回落到服务端默认（0 = 零搜索），而下拉框还显示着刚才选的档位
+// —— 界面写着「512 次模拟」，AI 却落子如飞。下拉框是输入控件，render() 按 #11
+// 那条不变量不能回写它去"纠正"显示，所以只能反过来：**让服务端采纳它**。
+// 与 color、model 同一个模式 —— 这几个下拉框就是"下一局要什么"的真相来源。
 const startGame = (color) =>
-  guard(() => api("/api/new", { color, model: selectedModel() }));
+  guard(() => api("/api/new", {
+    color, model: selectedModel(), sims: Number($("sims").value) || 0,
+  }));
 const newGame = () => startGame($("color").value);
 
 // ── 模型切换 ────────────────────────────────────────────────────────────────
@@ -621,6 +641,11 @@ function draw() {
     const c = i % N, r = (i - c) / N;
     drawStone(c, r, grid[i]);
   }
+  // 已点下、服务端还没确认的那颗。viewPly 非空时在复盘，不画。
+  if (pendingStone !== null && viewPly === null && grid[pendingStone.move] === 0) {
+    const c = pendingStone.move % N, r = (pendingStone.move - c) / N;
+    drawStone(c, r, pendingStone.color);
+  }
 
   // 模型选中这一手时给它自己的概率，标在那颗子上。
   // 按提示（analysis.move 还是空点）时不画 —— 那手还没下，它是候选不是落子。
@@ -822,6 +847,7 @@ canvas.addEventListener("pointerdown", (ev) => {
   const p = pointAt(ev);
   if (p === null || S.grid[p] !== 0) return;
   hover = p;
+  pendingStone = { move: p, color: S.human };
   guard(() => api("/api/move", { sid: S.sid, move: p }));
 });
 
@@ -844,7 +870,10 @@ document.addEventListener("keydown", (ev) => {
     ev.preventDefault();
     draw();
   } else if (ev.key === "Enter" && hover !== null && isMyTurn() && viewPly === null) {
-    if (S.grid[hover] === 0) guard(() => api("/api/move", { sid: S.sid, move: hover }));
+    if (S.grid[hover] === 0) {
+      pendingStone = { move: hover, color: S.human };
+      guard(() => api("/api/move", { sid: S.sid, move: hover }));
+    }
   } else if (ev.key === "Escape" && viewPly !== null) {
     viewPly = null; render();
   }

@@ -419,5 +419,31 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             }
             return out;
           },
-          "各槽位按根节点访问数取的最佳着法；非活跃槽位为 -1");
+          "各槽位按根节点访问数取的最佳着法；非活跃槽位为 -1")
+
+      .def(
+          "visit_counts",
+          [](const gi::BatchSearcher& self) {
+            Array<int32_t> out({self.capacity(), self.num_cells()});
+            int32_t* p = out.mutable_data();
+            {
+              py::gil_scoped_release release;
+              self.visit_counts(p);
+            }
+            return out;
+          },
+          "根节点各着法的访问数 (capacity, num_cells)；非活跃槽位整行为 0")
+
+      .def(
+          "root_values",
+          [](const gi::BatchSearcher& self) {
+            Array<float> out({self.capacity()});
+            float* p = out.mutable_data();
+            {
+              py::gil_scoped_release release;
+              self.root_values(p);
+            }
+            return out;
+          },
+          "各槽位根节点的价值（行棋方视角）；非活跃槽位为 0");
 }

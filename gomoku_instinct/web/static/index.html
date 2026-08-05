@@ -153,6 +153,12 @@
     </div>
     <div class="row">
       <label class="chk" style="flex:1 1 auto; min-width:0">
+        搜索
+        <select id="sims" style="flex:1 1 auto; min-width:0"></select>
+      </label>
+    </div>
+    <div class="row">
+      <label class="chk" style="flex:1 1 auto; min-width:0">
         候选阈值 ≥
         <input type="range" id="thr" min="1" max="50" step="1" value="5"
                style="flex:1 1 70px; min-width:60px">
@@ -295,6 +301,20 @@ function renderModels() {
     o.selected = m.id === activeId;
     return o;
   }));
+}
+
+// 搜索档位下拉。0 是零搜索 —— 项目的默认，也是技术报告里所有数字的口径。
+// 每手耗时约 sims × 11ms，直接写进选项文字里，免得选了 400 才发现要等四秒。
+function renderSims() {
+  const el = $("sims");
+  const choices = (S && S.sims_choices) || [0];
+  if (el.options.length === choices.length) return;   // 只在集合变化时重建
+  const keep = el.value;
+  el.replaceChildren(...choices.map((n) => new Option(
+    n === 0 ? "关（零搜索，约 11 毫秒/手）" : `${n} 次模拟（约 ${(n * 0.011).toFixed(1)} 秒/手）`,
+    String(n))));
+  if (keep !== "") el.value = keep;
+  else if (S) el.value = String(S.sims);
 }
 
 // ── 观战：模型互下 ──────────────────────────────────────────────────────────
@@ -629,17 +649,21 @@ function statusText() {
 function render() {
   if (!S) return;
   // 观战时两边可能是不同的模型（甚至同一个模型的不同步数），只报一个 step 会误导
+  const searchTag = S.sims > 0 ? `　🔍 搜索 ${S.sims} 次` : "";
   $("meta").textContent = S.watching
     ? `● ${seatName(S.colors.black)} @${S.seats[S.colors.black].step.toLocaleString()}`
       + `　vs　○ ${seatName(S.colors.white)} @${S.seats[S.colors.white].step.toLocaleString()}`
       + (S.opening > 0 ? `　开局 ${S.opening} 手随机（中央 5×5 内）` : "　无随机开局")
-    : `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手　零搜索`;
+      + searchTag
+    : `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手`
+      + (S.sims > 0 ? searchTag : "　零搜索");
   // 切换失败时（比如两个模型棋盘尺寸不一样）下拉框要弹回真正生效的那个，
   // 否则页面显示的和实际在下棋的不是同一个模型。
   renderModels();
   // 这些都是 <span> 或 style，不是输入控件 —— 不违反"render 不得回写输入控件"那条。
   $("thrVal").textContent = $("thr").value + "%";
   $("paceVal").textContent = Number($("pace").value).toFixed(1) + "s";
+  renderSims();
   $("openVal").textContent = $("opening").value + " 手";
   const watching = !!(S && S.watching);
   $("playPanel").style.display = watching ? "none" : "";
@@ -785,6 +809,12 @@ $("manual").onchange = () => {
   if ($("manual").checked) stopWatch();
   else if (S && S.watching && S.outcome === "ongoing") { watchOn = true; scheduleNext(); }
   render();
+};
+$("sims").onchange = () => {
+  const n = Number($("sims").value);
+  if (!S) return;
+  // 立刻生效，包括对局中途 —— 比赛用时不定，这个就是拿来随时调的
+  guard(() => api("/api/sims", { sid: S.sid, sims: n }));
 };
 $("opening").oninput = () => {
   localStorage.setItem("gi_opening", $("opening").value);

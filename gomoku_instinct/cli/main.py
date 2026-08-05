@@ -19,6 +19,7 @@ def _cmd_serve(args) -> int:
         safe_mode=args.safe_mode,
         temperature=args.temperature,
         reload_seconds=args.reload_seconds,
+        sims=args.sims,
     )
 
 
@@ -103,6 +104,12 @@ def main(argv: list[str] | None = None) -> int:
         help="默认只监听回环地址。页面没有认证，开发机通常是共享的 —— "
              "要从别的机器访问，优先用 SSH 端口转发",
     )
+    serve_parser.add_argument(
+        "--sims", type=int, default=0,
+        help="每手做多少次 MCTS 模拟。**默认 0 = 零搜索**，也就是本项目的核心约束。"
+             "给正值会开启搜索：同一份权重配 64 次模拟约值 +200 Elo，"
+             "但技术报告里的所有棋力数字都是零搜索口径，开着搜索的服务不能用来测那些数。"
+             "每手耗时约 sims × 11 毫秒。页面上每局可以各自调。")
     serve_parser.add_argument("--safe-mode", action="store_true",
                               help="用规则替 AI 屏蔽禁手点。默认关闭")
     serve_parser.add_argument("--temperature", type=float, default=0.0)

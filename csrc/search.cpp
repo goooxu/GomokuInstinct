@@ -119,6 +119,28 @@ bool BatchSearcher::done() const {
   return true;
 }
 
+void BatchSearcher::visit_counts(int32_t* out) const {
+  const int n = num_cells();
+  for (int i = 0; i < capacity(); ++i) {
+    int32_t* row = out + static_cast<size_t>(i) * n;
+    const Slot& slot = slots_[i];
+    if (!slot.active) {
+      std::fill(row, row + n, 0);
+      continue;
+    }
+    // 直接从树里现取，不读 slot.visits —— 后者只在跑满 sims 的那一刻回填，
+    // 中途调用会读到上一次搜索留下的旧值，而那种错不报任何异常。
+    slot.tree->root_visit_counts(row);
+  }
+}
+
+void BatchSearcher::root_values(float* out) const {
+  for (int i = 0; i < capacity(); ++i) {
+    const Slot& slot = slots_[i];
+    out[i] = slot.active ? slot.tree->root_value() : 0.0f;
+  }
+}
+
 void BatchSearcher::best_moves(int32_t* out) const {
   const int n = num_cells();
   for (int i = 0; i < capacity(); ++i) {

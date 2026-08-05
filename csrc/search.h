@@ -49,6 +49,14 @@ class BatchSearcher {
   // 各槽位按根节点访问数取的最佳着法；非活跃槽位写 -1
   void best_moves(int32_t* out) const;
 
+  // 根节点各着法的访问数，按 capacity × num_cells 行主序写出；非活跃槽位整行写 0。
+  // 部署端要用它显示"搜索到底看了哪些点、各看了多少次" —— 那是搜索模式下
+  // 与零搜索的策略概率对应的东西。
+  void visit_counts(int32_t* out) const;
+
+  // 各槽位根节点的价值（行棋方视角）；非活跃槽位写 0。
+  void root_values(float* out) const;
+
  private:
   struct Slot {
     std::unique_ptr<Position> pos;

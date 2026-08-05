@@ -42,6 +42,16 @@ ANALYSIS_TOP_K = 100 // MIN_CANDIDATE_THRESHOLD_PCT
 # 会话上限。超出后淘汰最旧的一局 —— 本地试玩工具，不做持久化。
 MAX_SESSIONS = 64
 
+# 部署端可选的搜索强度。**0 是默认，也就是项目的零搜索约束。**
+#
+# 档位是离散的，不做连续滑杆：`BatchSearcher` 的 sims 在构造时就固定了，
+# 连续取值意味着为每个位置各造一个 searcher。
+#
+# 每手耗时 ≈ sims × 单次前向（约 11 ms）—— 单局面搜索是串行的，
+# 一个槽位每轮只产一个叶子，所以这条线性关系相当准。实测（15×15，一张卡）：
+# 16→0.17s  32→0.35s  64→0.70s  128→1.4s  256→2.7s  400→4.3s
+SIMS_CHOICES = (0, 16, 32, 64, 128, 256, 400)
+
 # 观战开局随机落子数。零搜索是确定性的，不随机开局的话每一局都是同一盘棋。
 # 默认 2 与竞技场 `play_match(random_opening_plies=2)` 一致；
 # 落点规则也共用同一份实现（`eval/opening.py`）。
@@ -88,6 +98,9 @@ class Session:
         # 观战模式：黑白各用一个模型（可以相同）。human 置 0 表示两边都是 AI。
         # 用「颜色 → 模型下标」而不是两个字段，是为了让 ai_move 不必关心是哪种模式。
         self.models: dict[int, int] = {}
+        # 这一局用多少次搜索。0 = 零搜索（项目默认）。**每局各自持有**，
+        # 和模型选择一样 —— 比赛用时不定，要能中途改。
+        self.sims = 0
         # 开头有多少手是随机落的（观战用，见 _api_new）。
         # 前端据此把那几颗子标出来 —— 不标的话你会把它们当成模型下的。
         self.opening_plies = 0
@@ -112,8 +125,11 @@ class App:
         device: str = "cpu",
         safe_mode: bool = False,
         temperature: float = 0.0,
+        sims: int = 0,
     ) -> None:
         self.size = size
+        # 新开的对局默认用这个搜索强度（命令行 --sims）。0 = 零搜索。
+        self.default_sims = sims
         # 可在页面上切换的模型。每项 {"name": 显示名, "path": --ckpt 给的原始路径}
         self.sources = list(sources or [{"name": "model", "path": None}])
         self.device = device
@@ -123,6 +139,8 @@ class App:
         # 挂着五个 run 却只玩其中一个时，不该为另外四个白占显存和启动时间。
         self._players: dict[int, InstinctPlayer] = {0: player}
         self._metas: dict[int, dict] = {0: meta}
+        # 带搜索的 player 按 (模型下标, 模拟数) 缓存。零搜索那份始终是 _players。
+        self._searchers: dict[tuple[int, int], object] = {}
         self.rules = RenjuRules()
         # 观战开局用。故意**不设种子** —— 这里要的就是每局不一样。
         self._opening_rng = random.Random()
@@ -174,11 +192,32 @@ class App:
         print(f"[serve] 载入 {source['name']}   step {meta['step']:,}", flush=True)
         return player
 
-    def _analyze_on_thread(self, game: Game, index: int):
-        return self.ensure_loaded(index).analyze(game, ANALYSIS_TOP_K)
+    def player_for(self, index: int, sims: int):
+        """取这一局该用的 player。**只能在推理线程上调用。**
 
-    def analyze(self, game: Game, index: int = 0):
-        return self._infer.submit(self._analyze_on_thread, game, index).result()
+        sims <= 0 走零搜索（项目默认那条路径），否则走 MCTS。
+        搜索 player 按 (模型, 模拟数) 缓存 —— `BatchSearcher` 的 sims
+        在构造时固定，换档位就得换一个。
+        """
+        base = self.ensure_loaded(index)
+        if sims <= 0:
+            return base
+        key = (index, sims)
+        found = self._searchers.get(key)
+        if found is None:
+            from ..cli.search_engine import SearchPlayer
+
+            found = SearchPlayer(base.model, self.size, self.device, sims=sims)
+            self._searchers[key] = found
+            print(f"[serve] {self.sources[index]['name']} 启用搜索 {sims} 次模拟"
+                  f"（约 {sims * 0.011:.1f} 秒/手）", flush=True)
+        return found
+
+    def _analyze_on_thread(self, game: Game, index: int, sims: int):
+        return self.player_for(index, sims).analyze(game, ANALYSIS_TOP_K)
+
+    def analyze(self, game: Game, index: int = 0, sims: int = 0):
+        return self._infer.submit(self._analyze_on_thread, game, index, sims).result()
 
     def step_of(self, index: int) -> int:
         """第 index 个模型练到哪一步了。
@@ -201,6 +240,11 @@ class App:
     def warmup(self) -> None:
         """先在推理线程上跑一次空盘，把句柄建好，免得第一手卡一下。"""
         self.analyze(Game(self.size, self.rules, ForbiddenSemantics.LOSE))
+        if self.default_sims > 0:
+            # 搜索档位也预热一次：第一次构造 BatchSearcher 要分配树，
+            # 不预热的话开局第一手会莫名其妙地慢。
+            self.analyze(Game(self.size, self.rules, ForbiddenSemantics.LOSE),
+                         0, self.default_sims)
 
     # ── 热加载 ──────────────────────────────────────────────────────────────
     def _reload_once(self, index: int) -> None:
@@ -289,6 +333,7 @@ class App:
             self.sessions.popitem(last=False)
         sid = secrets.token_urlsafe(12)
         session = Session(self.size, self.rules, human, model)
+        session.sims = self.default_sims
         if models:
             session.models = dict(models)
         self.sessions[sid] = session
@@ -318,7 +363,7 @@ class App:
         game = session.game
         if game.is_terminal() or session.resigned is not None:
             return
-        analysis = self.analyze(game, session.model_for(game.to_move))
+        analysis = self.analyze(game, session.model_for(game.to_move), session.sims)
         session.analysis_color = game.to_move
         session.analysis = analysis
         game.play(analysis.move)
@@ -370,6 +415,10 @@ class App:
                 "id": session.model,
                 "name": self.sources[session.model]["name"],
             },
+            # 搜索强度。0 = 零搜索（项目默认）。**必须发到前端并显眼标出** ——
+            # 拿一个开着搜索的服务去测棋力却不自知，正是第 11 章那类静默失败。
+            "sims": session.sims,
+            "sims_choices": list(SIMS_CHOICES),
             # 观战模式：两边都是 AI，界面据此切换控件并驱动单步推进
             "watching": session.watching,
             "opening": session.opening_plies,
@@ -487,6 +536,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/resign": self._api_resign,
             "/api/model": self._api_model,
             "/api/step": self._api_step,
+            "/api/sims": self._api_sims,
         }
         handler = handlers.get(path)
         if handler is None:
@@ -561,6 +611,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "只有观战模式能用单步推进"}, 409)
             return
         self.app.ai_move(session)
+        self._json(self.app.state(payload["sid"], session))
+
+    def _api_sims(self, payload: dict) -> None:
+        """改**这一局**的搜索强度。别的对局不受影响，对局中途也能改。"""
+        session = self._session(payload)
+        if session is None:
+            return
+        sims = payload.get("sims")
+        if not isinstance(sims, int) or sims not in SIMS_CHOICES:
+            self._json({"error": f"sims 只能取 {list(SIMS_CHOICES)}"}, 400)
+            return
+        session.sims = sims
         self._json(self.app.state(payload["sid"], session))
 
     def _api_model(self, payload: dict) -> None:
@@ -672,6 +734,7 @@ def build_app(
     device: str = "cpu",
     safe_mode: bool = False,
     temperature: float = 0.0,
+    sims: int = 0,
 ) -> App:
     paths = [checkpoint] if isinstance(checkpoint, str) else list(checkpoint)
     model, meta = load_model(paths[0], device)
@@ -681,7 +744,7 @@ def build_app(
     )
     return App(player, meta, size,
                sources=[_source_entry(p) for p in paths], device=device,
-               safe_mode=safe_mode, temperature=temperature)
+               safe_mode=safe_mode, temperature=temperature, sims=sims)
 
 
 def serve(
@@ -692,14 +755,22 @@ def serve(
     safe_mode: bool = False,
     temperature: float = 0.0,
     reload_seconds: float = 0.0,
+    sims: int = 0,
 ) -> int:
-    app = build_app(checkpoint, device, safe_mode, temperature)
+    app = build_app(checkpoint, device, safe_mode, temperature, sims)
     app.warmup()
     app.start_watching(reload_seconds)
     httpd = ThreadingHTTPServer((host, port), functools.partial(Handler, app))
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "") else host
     print(f"权重 step {app.meta['step']:,}   棋盘 {app.size}x{app.size}   设备 {device}")
-    print("AI 落子完全由一次网络前向决定，不使用任何搜索。")
+    if sims > 0:
+        print(f"** 搜索模式：每手 {sims} 次 MCTS 模拟（约 {sims * 0.011:.1f} 秒/手）**")
+        print("   这**破坏了本项目「零搜索推理」那条核心约束** —— "
+              "技术报告里的所有棋力数字都是零搜索口径，")
+        print("   不要拿这个服务去测那些数。页面上每局可以各自改档位，0 即恢复零搜索。")
+    else:
+        print("AI 落子完全由一次网络前向决定，不使用任何搜索。"
+              "（--sims N 可开搜索，默认关闭）")
     if len(app.sources) > 1:
         print("可选模型：" + "、".join(s["name"] for s in app.sources)
               + "　（每局各自选，开多个标签页就能同时玩多局）")

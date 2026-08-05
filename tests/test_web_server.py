@@ -1007,3 +1007,64 @@ def test_web_and_arena_share_one_opening_sampler():
 
     assert "opening_moves(" in inspect.getsource(arena.play_match)
     assert "opening_moves(" in inspect.getsource(srv.App.random_opening)
+
+
+# ── 搜索模式 ───────────────────────────────────────────────────────────────
+
+
+def test_search_is_off_by_default(server):
+    """**这条是护栏。** 搜索一旦默认生效，会悄悄改变所有既有用法与评测口径 ——
+    技术报告里的每一个棋力数字都是零搜索测出来的。"""
+    base, app = server
+    assert app.default_sims == 0
+    _, s = post(base, "/api/new", {"color": "black"})
+    assert s["sims"] == 0
+    assert s["sims_choices"][0] == 0
+
+
+def test_sims_is_per_session_and_changeable_mid_game(server):
+    """比赛用时不定，档位要能对局中途改，而且只影响这一局。"""
+    base, _ = server
+    _, a = post(base, "/api/new", {"color": "black"})
+    _, b = post(base, "/api/new", {"color": "black"})
+    post(base, "/api/move", {"sid": a["sid"], "move": rowcol(7, 7)})
+
+    status, a2 = post(base, "/api/sims", {"sid": a["sid"], "sims": 32})
+    assert status == 200 and a2["sims"] == 32
+    assert len(a2["history"]) == 2, "改档位不该动棋盘"
+
+    _, b2 = post(base, "/api/state" if False else "/api/hint", {"sid": b["sid"]})
+    assert b2["sims"] == 0, "另一局不受影响"
+
+
+@pytest.mark.parametrize("bad", [7, -1, 1000, "64", None, 1.5])
+def test_sims_rejects_values_outside_the_menu(server, bad):
+    """档位必须来自固定集合 —— BatchSearcher 的 sims 在构造时固定，
+    任意取值意味着为每个值各造一个 searcher。"""
+    base, _ = server
+    _, s = post(base, "/api/new", {"color": "black"})
+    status, _ = post(base, "/api/sims", {"sid": s["sid"], "sims": bad})
+    assert status == 400
+
+
+def test_zero_search_engine_stays_free_of_search():
+    """`cli/engine.py` 的文档字符串写着「这里是零搜索约束的落地点」。
+    搜索必须留在 `cli/search_engine.py`，否则那句话就成了假的。"""
+    import inspect
+
+    from gomoku_instinct.cli import engine
+
+    src = inspect.getsource(engine)
+    for word in ("MctsPlayer", "BatchSearcher", "search_engine", "sims"):
+        assert word not in src, f"零搜索引擎里出现了 {word}"
+
+
+def test_search_mode_is_visible_in_the_banner():
+    """开着搜索却打印「不使用任何搜索」就是在撒谎 —— 那正是
+    「拿开着搜索的服务去测棋力而不自知」的入口。"""
+    import inspect
+
+    from gomoku_instinct.web import server as srv
+
+    src = inspect.getsource(srv.serve)
+    assert "sims > 0" in src and "破坏了本项目" in src

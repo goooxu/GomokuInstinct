@@ -20,6 +20,7 @@ def _cmd_serve(args) -> int:
         temperature=args.temperature,
         reload_seconds=args.reload_seconds,
         sims=args.sims,
+        leaves=args.leaves,
     )
 
 
@@ -109,7 +110,14 @@ def main(argv: list[str] | None = None) -> int:
         help="每手做多少次 MCTS 模拟。**默认 0 = 零搜索**，也就是本项目的核心约束。"
              "给正值会开启搜索：同一份权重配 64 次模拟约值 +200 Elo，"
              "但技术报告里的所有棋力数字都是零搜索口径，开着搜索的服务不能用来测那些数。"
-             "每手耗时约 sims × 11 毫秒。页面上每局可以各自调。")
+             "每手耗时正比于轮数而非模拟数（一轮取多个叶子，见第 6 章）："
+             "64 档约 0.15 秒、1024 档约 1 秒、4096 档约 3.6 秒。"
+             "页面上每局可以各自调。")
+    serve_parser.add_argument(
+        "--leaves", type=int, default=16,
+        help="一轮从同一棵树里取几个叶子凑成一批（virtual loss）。"
+             "对战只有一个局面，不凑批的话 GPU 每次只算一个输入、利用率约 1.7%。"
+             "16 时同样墙钟能跑约 12 倍的模拟数；1 = 逐叶精确搜索，即评测用的口径。")
     serve_parser.add_argument("--safe-mode", action="store_true",
                               help="用规则替 AI 屏蔽禁手点。默认关闭")
     serve_parser.add_argument("--temperature", type=float, default=0.0)

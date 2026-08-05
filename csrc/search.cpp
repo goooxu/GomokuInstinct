@@ -10,12 +10,14 @@ namespace gi {
 BatchSearcher::BatchSearcher(int board_size, int sims, const MctsConfig& mcts,
                              const RuleConfig& rules,
                              ForbiddenSemantics semantics, int num_slots,
-                             int num_threads)
-    : size_(board_size), sims_(sims) {
+                             int num_threads, int leaves_per_slot)
+    : size_(board_size), sims_(sims), leaves_(std::max(1, leaves_per_slot)) {
   rules_ = std::make_unique<Rules>(rules);
 
   MctsConfig cfg = mcts;
-  cfg.max_nodes = sims + 8;  // 每次搜索重建一棵树，节点池只需覆盖单次搜索
+  // 每次搜索重建一棵树，节点池只需覆盖单次搜索。批量收集时一轮会多开几个节点，
+  // 按 leaves 留出余量 —— 池子耗尽本身有兜底，但那条路径会让搜索白跑。
+  cfg.max_nodes = sims + 8 * std::max(1, leaves_per_slot) + 8;
 
   const int n = num_cells();
   slots_.resize(num_slots);
@@ -23,6 +25,8 @@ BatchSearcher::BatchSearcher(int board_size, int sims, const MctsConfig& mcts,
     slot.pos = std::make_unique<Position>(board_size, rules_.get(), semantics);
     slot.tree = std::make_unique<MctsTree>(n, cfg);
     slot.visits.resize(n);
+    slot.pending.resize(leaves_);
+    for (Pending& p : slot.pending) p.moves.resize(n);
   }
   pool_ = std::make_unique<ThreadPool>(std::max(0, num_threads));
 }
@@ -39,7 +43,7 @@ void BatchSearcher::set_positions(const int32_t* moves, const int32_t* counts,
     slot.pos->reset();
     slot.tree->clear();
     slot.sims_done = 0;
-    slot.descent_depth = 0;
+    slot.pending_count = 0;
     slot.leaf = -1;
     slot.active = i < active_count_;
 
@@ -59,31 +63,67 @@ void BatchSearcher::collect(uint8_t* boards, uint8_t* to_move, int32_t* history,
   const int n = num_cells();
   auto work = [&](int i) {
     Slot& slot = slots_[i];
-    const size_t base = static_cast<size_t>(i) * n;
 
-    if (!slot.active || slot.sims_done >= sims_) {
-      // 非活跃槽位仍要填出合法输入，保持批形状不变
-      std::memset(boards + base, EMPTY, static_cast<size_t>(n));
-      to_move[i] = BLACK;
-      for (int k = 0; k < HISTORY_PLANES; ++k) {
-        history[static_cast<size_t>(i) * HISTORY_PLANES + k] = -1;
+    // 这一轮该槽位最多再跑多少次模拟
+    const int budget = slot.active ? std::min(leaves_, sims_ - slot.sims_done) : 0;
+    slot.pending_count = 0;
+
+    for (int j = 0; j < budget; ++j) {
+      const size_t row = static_cast<size_t>(i) * leaves_ + j;
+      const size_t rbase = row * n;
+
+      // leaves_ == 1 时走原来那条精确路径，**一个字节都不碰 virtual loss**。
+      const Descent d = leaves_ == 1
+                            ? slot.tree->descend(*slot.pos)
+                            : slot.tree->descend_with_virtual_loss(*slot.pos);
+
+      // 先判重再记录。树还没长开时（例如根节点尚未展开）连续下潜会拿到
+      // 同一个叶子 —— 那次模拟对搜索没有任何贡献，**不能计数**，
+      // 否则同样的 sims 下批量会比逐叶少算几次（实测少 1 次，被测试抓到）。
+      bool repeated = false;
+      for (int k = 0; k < slot.pending_count; ++k) {
+        if (slot.pending[k].leaf == d.leaf) { repeated = true; break; }
       }
-      move_number[i] = 0;
-      active[i] = 0;
-      return;
+      const int depth_now = slot.pos->ply() - slot.root_ply;
+      if (repeated) {
+        for (int k = 0; k < depth_now; ++k) slot.pos->undo();
+        slot.tree->undo_virtual_loss(d.leaf);   // 不用它，就得把虚拟败绩撤掉
+        break;
+      }
+
+      Pending& p = slot.pending[slot.pending_count];
+      p.leaf = d.leaf;
+      p.needs_eval = d.needs_eval;
+      p.terminal_value = d.terminal_value;
+      // 展开要用的合法着法必须当场取 —— 下面就把局面回退了。
+      p.move_count = d.needs_eval ? slot.pos->legal_moves(p.moves.data()) : 0;
+
+      slot.pos->copy_grid_to(boards + rbase);
+      to_move[row] = slot.pos->to_move();
+      slot.pos->history(history + row * HISTORY_PLANES);
+      move_number[row] = slot.pos->ply();
+      active[row] = 1;
+      ++slot.pending_count;
+
+      // 回退到根，下一次下潜重新从根出发
+      const int depth = slot.pos->ply() - slot.root_ply;
+      for (int k = 0; k < depth; ++k) slot.pos->undo();
+
+      // 终局叶子不会被展开，再下潜还是它 —— 这一轮到此为止。
+      if (!d.needs_eval) break;
     }
 
-    const Descent d = slot.tree->descend(*slot.pos);
-    slot.leaf = d.leaf;
-    slot.leaf_needs_eval = d.needs_eval;
-    slot.leaf_terminal_value = d.terminal_value;
-    slot.descent_depth = slot.pos->ply() - slot.root_ply;
-
-    slot.pos->copy_grid_to(boards + base);
-    to_move[i] = slot.pos->to_move();
-    slot.pos->history(history + static_cast<size_t>(i) * HISTORY_PLANES);
-    move_number[i] = slot.pos->ply();
-    active[i] = 1;
+    // 没用上的行仍要填出合法输入，保持批形状不变（CUDA Graph 那条设计约束）
+    for (int j = slot.pending_count; j < leaves_; ++j) {
+      const size_t row = static_cast<size_t>(i) * leaves_ + j;
+      std::memset(boards + row * n, EMPTY, static_cast<size_t>(n));
+      to_move[row] = BLACK;
+      for (int k = 0; k < HISTORY_PLANES; ++k) {
+        history[row * HISTORY_PLANES + k] = -1;
+      }
+      move_number[row] = 0;
+      active[row] = 0;
+    }
   };
   pool_->run(work, capacity());
 }
@@ -92,24 +132,41 @@ void BatchSearcher::apply(const float* policy, const float* value) {
   const int n = num_cells();
   auto work = [&](int i) {
     Slot& slot = slots_[i];
-    if (!slot.active || slot.sims_done >= sims_) return;
+    if (!slot.active) return;
+    const bool clear_virtual = leaves_ > 1;
 
-    if (slot.leaf_needs_eval) {
-      slot.tree->expand_and_backup(
-          slot.leaf, policy + static_cast<size_t>(i) * n, value[i], *slot.pos);
-    } else {
-      slot.tree->backup_terminal(slot.leaf, slot.leaf_terminal_value);
+    for (int j = 0; j < slot.pending_count; ++j) {
+      const Pending& p = slot.pending[j];
+      const size_t row = static_cast<size_t>(i) * leaves_ + j;
+
+      if (p.needs_eval && !slot.tree->expanded(p.leaf)) {
+        slot.tree->expand_and_backup_moves(p.leaf, policy + row * n, value[row],
+                                           p.moves.data(), p.move_count,
+                                           clear_virtual);
+      } else {
+        // 两种情况走这里：终局叶子；以及**这一轮里已经被展开过的同一个叶子**。
+        // 后者重复展开会把子节点池写坏，所以只回传。
+        const float v = p.needs_eval ? value[row] : p.terminal_value;
+        slot.tree->backup_terminal(p.leaf, v, clear_virtual);
+      }
+      ++slot.sims_done;
     }
-
-    for (int k = 0; k < slot.descent_depth; ++k) slot.pos->undo();
-    slot.descent_depth = 0;
-    ++slot.sims_done;
+    slot.pending_count = 0;
+    // 局面在 collect 里就已经回退到根了，这里不需要再 undo。
 
     if (slot.sims_done >= sims_) {
       slot.tree->root_visit_counts(slot.visits.data());
     }
   };
   pool_->run(work, capacity());
+}
+
+int64_t BatchSearcher::virtual_outstanding() const {
+  int64_t total = 0;
+  for (const Slot& slot : slots_) {
+    if (slot.tree) total += slot.tree->virtual_outstanding();
+  }
+  return total;
 }
 
 bool BatchSearcher::done() const {

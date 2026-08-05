@@ -1029,15 +1029,15 @@ def test_sims_is_per_session_and_changeable_mid_game(server):
     _, b = post(base, "/api/new", {"color": "black"})
     post(base, "/api/move", {"sid": a["sid"], "move": rowcol(7, 7)})
 
-    status, a2 = post(base, "/api/sims", {"sid": a["sid"], "sims": 32})
-    assert status == 200 and a2["sims"] == 32
+    status, a2 = post(base, "/api/sims", {"sid": a["sid"], "sims": 64})
+    assert status == 200 and a2["sims"] == 64
     assert len(a2["history"]) == 2, "改档位不该动棋盘"
 
     _, b2 = post(base, "/api/state" if False else "/api/hint", {"sid": b["sid"]})
     assert b2["sims"] == 0, "另一局不受影响"
 
 
-@pytest.mark.parametrize("bad", [7, -1, 1000, "64", None, 1.5])
+@pytest.mark.parametrize("bad", [7, -1, 999, "64", None, 1.5])
 def test_sims_rejects_values_outside_the_menu(server, bad):
     """档位必须来自固定集合 —— BatchSearcher 的 sims 在构造时固定，
     任意取值意味着为每个值各造一个 searcher。"""
@@ -1068,3 +1068,165 @@ def test_search_mode_is_visible_in_the_banner():
 
     src = inspect.getsource(srv.serve)
     assert "sims > 0" in src and "破坏了本项目" in src
+
+
+def test_watch_can_pit_search_against_no_search(server):
+    """**这就是「带搜索 vs 不带搜索打一场」。**
+
+    搜索强度原本是整局一个值，黑白共用 —— 想比"同一份权重差多少"做不到。
+    现在与模型选择同一个模式：每色各自持有，没单独指定就回落到整局的值。
+    """
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    status, s = post(base, "/api/new", {
+        "watch": {"black": 0, "white": 0, "sims": {"black": 64, "white": 0}}})
+    assert status == 200
+    assert s["seats"]["1"]["sims"] == 64 and s["seats"]["2"]["sims"] == 0
+
+
+def test_seat_sims_changeable_mid_game(server):
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    _, s = post(base, "/api/new", {"watch": {"black": 0, "white": 0}})
+    _, s = post(base, "/api/step", {"sid": s["sid"]})
+    status, s = post(base, "/api/sims", {"sid": s["sid"], "sims": 64, "color": 2})
+    assert status == 200
+    assert s["seats"]["2"]["sims"] == 64, "白方改了"
+    assert s["seats"]["1"]["sims"] == 0, "黑方不该跟着变"
+
+
+def test_sims_without_color_resets_both_seats(server):
+    """不给 color 就是整局改 —— 此时之前的分色设置必须清掉，
+    否则界面显示"整局 64"而实际某一方还停在旧值。"""
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    _, s = post(base, "/api/new", {
+        "watch": {"black": 0, "white": 0, "sims": {"black": 128, "white": 0}}})
+    _, s = post(base, "/api/sims", {"sid": s["sid"], "sims": 64})
+    assert s["seats"]["1"]["sims"] == 64 and s["seats"]["2"]["sims"] == 64
+
+
+@pytest.mark.parametrize("bad", [{"black": 7}, {"white": -1}, {"black": "64"}])
+def test_watch_rejects_bad_seat_sims(server, bad):
+    base, app = server
+    app.sources = [{"name": "a", "path": "A"}]
+    status, _ = post(base, "/api/new",
+                     {"watch": {"black": 0, "white": 0, "sims": bad}})
+    assert status == 400
+
+
+def test_render_never_writes_seat_sims_selects():
+    """两个座位档位下拉是输入控件，render 不得回写（#11 那条不变量）。"""
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function render()"))
+    assert not re.findall(r'\$\("s(Black|White)"\)\.value\s*=(?!=)', body)
+
+
+def test_global_sims_row_is_hidden_while_watching():
+    """观战时黑白各有自己的搜索档位，底部那个全局档位会把两边一起覆盖 ——
+    两处并存含义冲突，必须按模式二选一显示。"""
+    import re
+
+    body = _strip_comments(_function_body(_page(), "function render()"))
+    assert re.search(r'\$\("simsRow"\)\.style\.display\s*=\s*watching', body)
+
+
+def test_icon_buttons_keep_an_accessible_label():
+    """按钮改成图标之后，**文字不能就这么没了** —— 每个都要有 title 与 aria-label。
+
+    图标本身是有歧义的（"回转箭头"是悔棋还是重开？），
+    没有悬停说明就只能靠猜；而认输是不可撤销的。
+    """
+    import re
+
+    page = _page()
+    for bid in ("new", "watchNew", "stepBtn", "pauseBtn", "undo", "hint", "resign"):
+        m = re.search(rf'<button id="{bid}"[^>]*>', page)
+        assert m, f"找不到按钮 {bid}"
+        tag = m.group(0)
+        assert "title=" in tag, f"{bid} 没有 title"
+        assert "aria-label" in tag, f"{bid} 没有 aria-label"
+
+
+def test_pause_button_icon_and_tooltip_change_together():
+    """暂停/继续是同一个按钮的两个状态。只换图标不换提示，
+    就会出现「图标是暂停、悬停写着继续」这种自相矛盾的显示。
+
+    断言的是**两者都随状态变**，不是具体怎么写的 —— 第一版把
+    `pauseBtn").innerHTML` 写死进断言，后来改用 setHtml 就误报了。
+    """
+    body = _strip_comments(_function_body(_page(), "function render()"))
+    # 图标随 paused 变
+    assert "paused" in body and "pauseBtn" in body
+    icon = [ln for ln in body.splitlines() if "pauseBtn" in ln]
+    assert any("svg" in ln for ln in icon) or any("setHtml" in ln for ln in body.splitlines()
+                                                  if "pauseBtn" in ln), "图标没跟着换"
+    assert any(".title" in ln for ln in icon), "悬停文字没跟着换"
+
+
+def test_resign_button_is_visually_separated():
+    """认输不可撤销，和别的图标按钮长得一模一样就容易误点。"""
+    page = _page()
+    import re
+
+    tag = re.search(r'<button id="resign"[^>]*>', page).group(0)
+    assert "danger" in tag, "认输按钮没有区分样式"
+    assert "button.ico.danger" in page, "danger 样式没定义"
+
+
+def test_scrollbar_space_is_always_reserved():
+    """**棋盘左右抖动的根因。**
+
+    面板高度随候选数、棋谱长度变化，竖直滚动条一出一进 #app 就窄约 15px，
+    而棋盘是居中的 —— 于是每落一手都横向挪一下。观战时每隔几秒发生一次，
+    盯着棋盘看的时候非常明显。
+    """
+    page = _page()
+    assert "scrollbar-gutter: stable" in page
+
+
+def test_candidate_list_height_is_fixed():
+    """候选数每手都在变，不锁高度面板就一跳一跳，进而带动滚动条与棋盘。"""
+    page = _page()
+    assert "#cands {" in page and "max-height" in page.split("#cands {")[1][:120]
+
+
+def test_render_does_not_rebuild_unchanged_dom():
+    """整块 innerHTML 重建会闪，而 guard() 在请求前后各 render 一次 ——
+    每落一手重建两遍。内容没变就不该写 DOM。"""
+    import re
+
+    page = _page()
+    # 除了 setHtml 自己那一处，不允许再有裸的 innerHTML 赋值
+    assigns = re.findall(r'(\$\([^)]*\)|\w+)\.innerHTML\s*=', page)
+    assert len(assigns) == 1, f"还有裸的 innerHTML 赋值：{assigns}"
+    assert "function setHtml(" in page
+
+
+def test_sims_tiers_cover_the_range_batching_made_affordable():
+    """一轮取多个叶子之后耗时正比于**轮数**而不是模拟数，
+    高档位一下子变得可用（4096 次约 3.6 秒/手）。天花板要跟着抬，
+    否则界面把用户挡在实测有效的强度之外。"""
+    from gomoku_instinct.web.server import SIMS_CHOICES
+
+    assert SIMS_CHOICES[0] == 0, "零搜索必须是第一档"
+    assert max(SIMS_CHOICES) >= 2048, "天花板还停在批量化之前的水平"
+    # 低档位没有存在的理由：sims=16 要 112ms 而 sims=128 只要 195ms
+    assert 16 not in SIMS_CHOICES and 32 not in SIMS_CHOICES
+
+
+def test_ui_time_estimate_is_based_on_rounds_not_sims():
+    """**界面标注差过一个数量级。**
+
+    批量化之前每手 ≈ sims × 11ms，之后 ≈ 轮数 × 14ms，而轮数 = sims / leaves。
+    400 档按旧公式写成 4.4 秒，实际 0.44 秒 —— 用户会照着一个错的数字选档位。
+    """
+    page = _page()
+    assert "function simsSeconds(" in page
+    body = _strip_comments(_function_body(page, "function simsSeconds"))
+    # 断言的是**公式按轮数算**，不是"字符串里不许出现某个常数" ——
+    # 零搜索那一档返回 0.011 是对的，第一版把它一起判成了错。
+    assert "leaves" in body, "耗时估算没有考虑一轮取几个叶子"
+    assert "Math.ceil(sims / leaves)" in body, "没有按轮数估算"
+    assert "sims * 0.011" not in page, "还留着按模拟数线性估算的旧公式"

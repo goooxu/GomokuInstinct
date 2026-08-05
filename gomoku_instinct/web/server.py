@@ -47,10 +47,15 @@ MAX_SESSIONS = 64
 # 档位是离散的，不做连续滑杆：`BatchSearcher` 的 sims 在构造时就固定了，
 # 连续取值意味着为每个位置各造一个 searcher。
 #
-# 每手耗时 ≈ sims × 单次前向（约 11 ms）—— 单局面搜索是串行的，
-# 一个槽位每轮只产一个叶子，所以这条线性关系相当准。实测（15×15，一张卡）：
-# 16→0.17s  32→0.35s  64→0.70s  128→1.4s  256→2.7s  400→4.3s
-SIMS_CHOICES = (0, 16, 32, 64, 128, 256, 400)
+# 一轮取多个叶子（第 6 章 6.8）之后，耗时不再正比于模拟数，而是正比于**轮数**
+# = sims / leaves，其中 leaves 被钳成 min(16, sims//8)。实测（15×15，一张卡）：
+#
+#   sims    64   128   256   512  1024  2048  4096
+#   每手  0.15s 0.20s 0.31s 0.55s 1.00s 1.86s 3.58s
+#
+# 16/32 那两档已经去掉：sims=16 要 112ms 而 sims=128 只要 195ms ——
+# 多花 74% 的时间换 8 倍模拟数，低档位没有存在的理由。
+SIMS_CHOICES = (0, 64, 128, 256, 512, 1024, 2048, 4096)
 
 # 观战开局随机落子数。零搜索是确定性的，不随机开局的话每一局都是同一盘棋。
 # 默认 2 与竞技场 `play_match(random_opening_plies=2)` 一致；
@@ -101,12 +106,18 @@ class Session:
         # 这一局用多少次搜索。0 = 零搜索（项目默认）。**每局各自持有**，
         # 和模型选择一样 —— 比赛用时不定，要能中途改。
         self.sims = 0
+        # 观战时黑白可以各用一个强度，比如让「零搜索」和「400 次模拟」直接对打。
+        # 与 models 同一个模式：没单独指定就回落到 self.sims。
+        self.sims_map: dict[int, int] = {}
         # 开头有多少手是随机落的（观战用，见 _api_new）。
         # 前端据此把那几颗子标出来 —— 不标的话你会把它们当成模型下的。
         self.opening_plies = 0
 
     def model_for(self, color: int) -> int:
         return self.models.get(color, self.model)
+
+    def sims_for(self, color: int) -> int:
+        return self.sims_map.get(color, self.sims)
 
     @property
     def watching(self) -> bool:
@@ -126,10 +137,13 @@ class App:
         safe_mode: bool = False,
         temperature: float = 0.0,
         sims: int = 0,
+        leaves: int = 16,
     ) -> None:
         self.size = size
         # 新开的对局默认用这个搜索强度（命令行 --sims）。0 = 零搜索。
         self.default_sims = sims
+        # 一轮从同一棵树里取几个叶子凑批。1 = 逐叶精确搜索（评测口径）。
+        self.leaves = leaves
         # 可在页面上切换的模型。每项 {"name": 显示名, "path": --ckpt 给的原始路径}
         self.sources = list(sources or [{"name": "model", "path": None}])
         self.device = device
@@ -207,7 +221,8 @@ class App:
         if found is None:
             from ..cli.search_engine import SearchPlayer
 
-            found = SearchPlayer(base.model, self.size, self.device, sims=sims)
+            found = SearchPlayer(base.model, self.size, self.device, sims=sims,
+                                 leaves=self.leaves)
             self._searchers[key] = found
             print(f"[serve] {self.sources[index]['name']} 启用搜索 {sims} 次模拟"
                   f"（约 {sims * 0.011:.1f} 秒/手）", flush=True)
@@ -363,7 +378,8 @@ class App:
         game = session.game
         if game.is_terminal() or session.resigned is not None:
             return
-        analysis = self.analyze(game, session.model_for(game.to_move), session.sims)
+        analysis = self.analyze(game, session.model_for(game.to_move),
+                                session.sims_for(game.to_move))
         session.analysis_color = game.to_move
         session.analysis = analysis
         game.play(analysis.move)
@@ -425,7 +441,8 @@ class App:
             "seats": {
                 str(c): {"id": session.model_for(c),
                          "name": self.sources[session.model_for(c)]["name"],
-                         "step": self.step_of(session.model_for(c))}
+                         "step": self.step_of(session.model_for(c)),
+                         "sims": session.sims_for(c)}
                 for c in (BLACK, WHITE)
             } if session.watching else None,
             "history": [
@@ -579,6 +596,18 @@ class Handler(BaseHTTPRequestHandler):
             except IndexError:
                 self._json({"error": "没有这个模型"}, 404)
                 return
+            # watch.sims = {"black": n, "white": m} —— 让不同强度直接对打
+            seat_sims = watch.get("sims")
+            if isinstance(seat_sims, dict):
+                for key, color in (("black", BLACK), ("white", WHITE)):
+                    v = seat_sims.get(key)
+                    if v is None:
+                        continue
+                    if not isinstance(v, int) or v not in SIMS_CHOICES:
+                        self._json(
+                            {"error": f"sims 只能取 {list(SIMS_CHOICES)}"}, 400)
+                        return
+                    session.sims_map[color] = v
             self.app.random_opening(session, opening)
             # 随机开局之后不自动走 —— 让界面按自己的节奏推进，模型的第一手也要看得见
             self._json(self.app.state(sid, session))
@@ -622,7 +651,16 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(sims, int) or sims not in SIMS_CHOICES:
             self._json({"error": f"sims 只能取 {list(SIMS_CHOICES)}"}, 400)
             return
-        session.sims = sims
+        # 给了 color 就只改那一方（观战时让两种强度对打），否则整局都改。
+        color = payload.get("color")
+        if color is None:
+            session.sims = sims
+            session.sims_map.clear()
+        elif color in (BLACK, WHITE):
+            session.sims_map[color] = sims
+        else:
+            self._json({"error": "color 只能是 1（黑）或 2（白）"}, 400)
+            return
         self._json(self.app.state(payload["sid"], session))
 
     def _api_model(self, payload: dict) -> None:
@@ -735,6 +773,7 @@ def build_app(
     safe_mode: bool = False,
     temperature: float = 0.0,
     sims: int = 0,
+    leaves: int = 16,
 ) -> App:
     paths = [checkpoint] if isinstance(checkpoint, str) else list(checkpoint)
     model, meta = load_model(paths[0], device)
@@ -744,7 +783,8 @@ def build_app(
     )
     return App(player, meta, size,
                sources=[_source_entry(p) for p in paths], device=device,
-               safe_mode=safe_mode, temperature=temperature, sims=sims)
+               safe_mode=safe_mode, temperature=temperature, sims=sims,
+               leaves=leaves)
 
 
 def serve(
@@ -756,15 +796,19 @@ def serve(
     temperature: float = 0.0,
     reload_seconds: float = 0.0,
     sims: int = 0,
+    leaves: int = 16,
 ) -> int:
-    app = build_app(checkpoint, device, safe_mode, temperature, sims)
+    app = build_app(checkpoint, device, safe_mode, temperature, sims, leaves)
     app.warmup()
     app.start_watching(reload_seconds)
     httpd = ThreadingHTTPServer((host, port), functools.partial(Handler, app))
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "") else host
     print(f"权重 step {app.meta['step']:,}   棋盘 {app.size}x{app.size}   设备 {device}")
     if sims > 0:
-        print(f"** 搜索模式：每手 {sims} 次 MCTS 模拟（约 {sims * 0.011:.1f} 秒/手）**")
+        rounds = -(-sims // max(1, min(leaves, sims // 8))) if leaves > 1 else sims
+        per_move = rounds * 0.014 + 0.04
+        print(f"** 搜索模式：每手 {sims} 次 MCTS 模拟"
+              f"（一轮取 {leaves} 个叶子，约 {per_move:.1f} 秒/手）**")
         print("   这**破坏了本项目「零搜索推理」那条核心约束** —— "
               "技术报告里的所有棋力数字都是零搜索口径，")
         print("   不要拿这个服务去测那些数。页面上每局可以各自改档位，0 即恢复零搜索。")

@@ -40,21 +40,44 @@ class SearchPlayer:
         device: torch.device | str = "cpu",
         sims: int = 64,
         dtype: torch.dtype = torch.bfloat16,
-        threads: int = 16,
+        # **1 是最优值，不是省事的默认值。** 搜索线程池并行的维度是「槽位」——
+        # 同时搜多少个不同局面 —— 而对战只有一个局面，所以多开的线程一个都用不上，
+        # 只剩唤醒/休眠开销。实测 256 次模拟：1 线程 344ms、16 线程 370ms、
+        # 64 线程 377ms，**越多越慢**。
+        # 一轮内部的多次下潜也没法并行：每次都要看上一次留下的虚拟败绩。
+        threads: int = 1,
+        leaves: int = 16,
     ) -> None:
         if sims <= 0:
             raise ValueError("sims 必须为正；零搜索请直接用 InstinctPlayer")
         self.model = model
         self.size = board_size
         self.sims = sims
-        # 网页版每次只搜一个局面，槽位开 1 就够。默认的 64 槽会白占一批树的内存，
-        # 而每轮仍然只有一个槽位在产叶子 —— 单局面搜索本来就是串行的。
+        # 网页版每次只搜一个局面，槽位开 1 就够。
+        #
+        # 关键是 `leaves`：一轮从同一棵树里取多个叶子凑成一批（virtual loss）。
+        # 不这么做的话每轮只产一个叶子，GPU 每次只算一个 15×15 的输入 ——
+        # 实测 CPU 只占 0.7%，其余全耗在 kernel 启动开销上，利用率约 1.7%。
+        # 开到 16 之后同样的墙钟能跑约 12 倍的模拟数（拐点在 8~16，再大不涨）。
+        #
+        # **评测侧仍然用 leaves=1**：批量收集是近似，竞技场与 search_gap 的口径
+        # 一个字都不能变，报告里的数字要保持可复算。
+        # **钳住 leaves，保证轮数够。** 一轮同时取 N 个叶子，就有 N 条路径是
+        # 靠虚拟败绩硬岔开的；轮数太少（sims/leaves 太小）搜索来不及收敛，
+        # 直接退化成宽度优先。实测 sims=64、leaves=16（只有 4 轮）时根节点访问
+        # 从 55:1:1:1 摊成 13:10:9:8 —— 快了，但搜的东西不一样了。
+        #
+        # 至少留 8 轮。网页那几个低档位（sims=16/32）不钳的话会整档失效，
+        # 而**这种失效不报错，只是棋力悄悄变差**。
+        self.leaves = max(1, min(leaves, sims // 8))
+        leaves = self.leaves
         self.player = MctsPlayer(
             ModelEvaluator(model, board_size, device, dtype=dtype),
             board_size,
             sims=sims,
             slots=1,
             threads=threads,
+            leaves=leaves,
         )
 
     def analyze(self, game: Game, top_k: int = 5) -> MoveAnalysis:

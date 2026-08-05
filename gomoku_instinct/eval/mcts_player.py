@@ -30,7 +30,11 @@ class MctsPlayer:
         slots: int = 64,
         threads: int = 24,
         c_puct: float = 1.6,
+        leaves: int = 1,
     ) -> None:
+        # leaves > 1 时一轮从同一棵树里取多个叶子凑批（virtual loss）。
+        # **默认 1** —— 竞技场与 `search_gap.py` 的口径一个字都不能变，
+        # 技术报告里的所有数字都要保持可复算。对战那条路径才开大它。
         core = load_core()
         self.searcher = core.BatchSearcher(
             board_size=board_size,
@@ -38,17 +42,20 @@ class MctsPlayer:
             num_slots=slots,
             c_puct=c_puct,
             num_threads=threads,
+            leaves_per_slot=leaves,
         )
         self.evaluator = evaluator
         self.size = board_size
         self.sims = sims
+        self.leaves = leaves
         n = board_size * board_size
+        rows = self.searcher.batch_rows      # slots × leaves
 
-        self.boards = np.zeros((slots, n), dtype=np.uint8)
-        self.to_move = np.zeros(slots, dtype=np.uint8)
-        self.history = np.zeros((slots, NUM_HISTORY_PLANES), dtype=np.int32)
-        self.move_number = np.zeros(slots, dtype=np.int32)
-        self.active = np.zeros(slots, dtype=np.uint8)
+        self.boards = np.zeros((rows, n), dtype=np.uint8)
+        self.to_move = np.zeros(rows, dtype=np.uint8)
+        self.history = np.zeros((rows, NUM_HISTORY_PLANES), dtype=np.int32)
+        self.move_number = np.zeros(rows, dtype=np.int32)
+        self.active = np.zeros(rows, dtype=np.uint8)
 
     def choose_batch(self, games: list[Game]) -> list[int]:
         capacity = self.searcher.capacity

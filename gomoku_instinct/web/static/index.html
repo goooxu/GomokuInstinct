@@ -16,6 +16,10 @@
     --accent: #b3452e;
   }
   * { box-sizing: border-box; }
+  /* **永远给竖直滚动条留出位置。** 面板高度随候选数、棋谱长度变化，
+     滚动条一出一进 #app 就窄 15px，而棋盘是居中的 —— 于是每落一手都左右挪一下。
+     观战时这个抖动尤其明显，因为它每隔几秒就发生一次。 */
+  html { scrollbar-gutter: stable; overflow-y: scroll; }
   body {
     margin: 0; background: #f3efe8; color: var(--ink);
     font: 14px/1.6 system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
@@ -44,6 +48,15 @@
   }
   button:hover:not(:disabled) { background: #f0ece5; }
   button:disabled { opacity: .45; cursor: default; }
+
+  /* 图标按钮。用内联 SVG 而不是 emoji —— emoji 在不同系统上字形差别很大，
+     而且没法跟着主题描边。stroke:currentColor 让它自动跟随文字色。 */
+  button.ico { padding: 6px; width: 34px; height: 32px; display: inline-flex;
+               align-items: center; justify-content: center; }
+  button.ico svg { width: 18px; height: 18px; stroke: currentColor; fill: none;
+                   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  /* 认输是不可撤销的一手，和别的按钮长得一样就容易误点。挪到最右并染色。 */
+  button.ico.danger { color: var(--accent); margin-left: auto; }
   label.chk { display: flex; align-items: center; gap: 6px; font-size: 13px;
               color: #4a453e; cursor: pointer; }
 
@@ -60,6 +73,9 @@
   .bar i { position: absolute; top: 0; bottom: 0; background: #55606e; }
   .barnum { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+  /* 候选数每手都在变（阈值以上有几个点不固定），不锁高度的话面板会一跳一跳。
+     留 5 行的位置，多了内部滚动。 */
+  #cands { min-height: 105px; max-height: 105px; overflow-y: auto; }
   .cand { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 1px 0;
           font-variant-numeric: tabular-nums; }
   .cand b { width: 34px; font-weight: 600; }
@@ -108,22 +124,29 @@
           <option value="black">我执黑（先手）</option>
           <option value="white">我执白（后手）</option>
         </select>
-        <button id="new">新局</button>
+        <button id="new" class="ico" title="新局" aria-label="新局"><svg viewBox="0 0 18 18"><path d="M9 3v12M3 9h12"/></svg></button>
       </div>
     </div>
 
     <div id="watchPanel" style="display:none">
+      <div class="row" style="opacity:.7; font-size:.85em">
+        <span style="width:2.4em"></span>
+        <span style="flex:2 1 auto">模型</span>
+        <span style="flex:1 1 6em">搜索</span>
+      </div>
       <div class="row">
         <span style="width:2.4em">● 黑</span>
-        <select id="mBlack" style="flex:1 1 auto; min-width:0"></select>
+        <select id="mBlack" style="flex:2 1 auto; min-width:0"></select>
+        <select id="sBlack" style="flex:1 1 6em; min-width:0"></select>
       </div>
       <div class="row">
         <span style="width:2.4em">○ 白</span>
-        <select id="mWhite" style="flex:1 1 auto; min-width:0"></select>
+        <select id="mWhite" style="flex:2 1 auto; min-width:0"></select>
+        <select id="sWhite" style="flex:1 1 6em; min-width:0"></select>
       </div>
       <div class="row">
         <label class="chk" style="flex:1 1 auto; min-width:0">
-          每手停
+          停顿
           <input type="range" id="pace" min="0" max="10" step="0.5" value="1.5"
                  style="flex:1 1 60px; min-width:60px">
           <span id="paceVal" style="width:3.4em; text-align:right">1.5s</span>
@@ -131,27 +154,29 @@
       </div>
       <div class="row">
         <label class="chk" style="flex:1 1 auto; min-width:0">
-          开局随机
+          开局
           <input type="range" id="opening" min="0" max="8" step="1" value="2"
                  style="flex:1 1 60px; min-width:60px">
           <span id="openVal" style="width:3.4em; text-align:right">2 手</span>
         </label>
       </div>
       <div class="row">
-        <label class="chk"><input type="checkbox" id="manual"> 手动逐手</label>
+        <label class="chk" title="勾上后只认「走一手」按钮，不自动推进"><input type="checkbox" id="manual"> 手动</label>
       </div>
       <div class="row">
-        <button id="watchNew">开新局</button>
-        <button id="stepBtn">走一手</button>
-        <button id="pauseBtn">暂停</button>
+        <button id="watchNew" class="ico" title="开新局" aria-label="开新局"><svg viewBox="0 0 18 18"><path d="M9 3v12M3 9h12"/></svg></button>
+        <button id="stepBtn" class="ico" title="走一手" aria-label="走一手"><svg viewBox="0 0 18 18"><path d="M4 3l7 6-7 6z"/><path d="M14 3v12"/></svg></button>
+        <button id="pauseBtn" class="ico" title="暂停" aria-label="暂停"><svg viewBox="0 0 18 18"></svg></button>
       </div>
     </div>
     <div class="row">
-      <button id="undo">悔棋</button>
-      <button id="hint">提示</button>
-      <button id="resign">认输</button>
+      <button id="undo" class="ico" title="悔棋" aria-label="悔棋"><svg viewBox="0 0 18 18"><path d="M3 8h8a4 4 0 110 8H7"/><path d="M6 5L3 8l3 3"/></svg></button>
+      <button id="hint" class="ico" title="提示" aria-label="提示"><svg viewBox="0 0 18 18"><path d="M7 15h4M8 17h2"/><path d="M9 2a5 5 0 00-3 9v2h6v-2a5 5 0 00-3-9z"/></svg></button>
+      <button id="resign" class="ico danger" title="认输" aria-label="认输"><svg viewBox="0 0 18 18"><path d="M4 2v14"/><path d="M4 3h9l-2 3 2 3H4z"/></svg></button>
     </div>
-    <div class="row">
+    <!-- 人机对战用的全局搜索档位。观战时整行隐藏 ——
+         那时黑白各有自己的档位（见 watchPanel），两处并存含义会冲突。 -->
+    <div class="row" id="simsRow">
       <label class="chk" style="flex:1 1 auto; min-width:0">
         搜索
         <select id="sims" style="flex:1 1 auto; min-width:0"></select>
@@ -159,7 +184,7 @@
     </div>
     <div class="row">
       <label class="chk" style="flex:1 1 auto; min-width:0">
-        候选阈值 ≥
+        候选 ≥
         <input type="range" id="thr" min="1" max="50" step="1" value="5"
                style="flex:1 1 70px; min-width:60px">
         <span id="thrVal" style="width:3.2em; text-align:right">5%</span>
@@ -303,6 +328,39 @@ function renderModels() {
   }));
 }
 
+// 每手大概要多久。**不能按"模拟数 × 单次前向"算** —— 一轮取多个叶子之后
+// 耗时正比于**轮数**（= sims / leaves），不是模拟数。按旧公式算，400 档会写成
+// 4.4 秒，实际只要 0.44 秒，差一个数量级。leaves 的钳位规则与服务端一致。
+function simsSeconds(sims) {
+  if (sims <= 0) return 0.011;
+  const leaves = Math.max(1, Math.min(16, Math.floor(sims / 8)));
+  return Math.ceil(sims / leaves) * 0.014 + 0.04;
+}
+
+// 观战时黑白各自的搜索档位。**这就是"带搜索 vs 不带搜索打一场"的入口** ——
+// 一边选「关」、一边选 400，直接看同一份权重差多少。
+// 和模型下拉一样是输入控件，render() 只在选项集合变化时重建、绝不按 S 回写（#11）。
+function renderSeatSims() {
+  const choices = (S && S.sims_choices) || [0];
+  for (const id of ["sBlack", "sWhite"]) {
+    const el = $(id);
+    if (el.options.length === choices.length) continue;
+    const keep = el.value;
+    el.replaceChildren(...choices.map((n) => new Option(
+      n === 0 ? "不搜索" : `${n} 次`, String(n))));
+    if (keep !== "") el.value = keep;
+  }
+}
+
+// 整块 innerHTML 重建会让内容闪一下，而 guard() 在请求前后各 render 一次 ——
+// 每落一手就重建两遍。内容没变就别写：写 DOM 才有重排和闪烁，比较字符串没有。
+const _lastHtml = {};
+function setHtml(id, html) {
+  if (_lastHtml[id] === html) return;
+  _lastHtml[id] = html;
+  $(id).innerHTML = html;
+}
+
 // 搜索档位下拉。0 是零搜索 —— 项目的默认，也是技术报告里所有数字的口径。
 // 每手耗时约 sims × 11ms，直接写进选项文字里，免得选了 400 才发现要等四秒。
 function renderSims() {
@@ -311,7 +369,8 @@ function renderSims() {
   if (el.options.length === choices.length) return;   // 只在集合变化时重建
   const keep = el.value;
   el.replaceChildren(...choices.map((n) => new Option(
-    n === 0 ? "关（零搜索，约 11 毫秒/手）" : `${n} 次模拟（约 ${(n * 0.011).toFixed(1)} 秒/手）`,
+    n === 0 ? "关（零搜索，约 11 毫秒/手）"
+            : `${n} 次模拟（约 ${simsSeconds(n).toFixed(2)} 秒/手）`,
     String(n))));
   if (keep !== "") el.value = keep;
   else if (S) el.value = String(S.sims);
@@ -355,6 +414,7 @@ function newWatchGame() {
       black: Number($("mBlack").value),
       white: Number($("mWhite").value),
       opening: Number($("opening").value),
+      sims: { black: Number($("sBlack").value), white: Number($("sWhite").value) },
     },
   })).then(() => {
     // 手动模式下开局就停在那儿，等你点「走一手」
@@ -650,11 +710,16 @@ function render() {
   if (!S) return;
   // 观战时两边可能是不同的模型（甚至同一个模型的不同步数），只报一个 step 会误导
   const searchTag = S.sims > 0 ? `　🔍 搜索 ${S.sims} 次` : "";
+  const seatTag = (c) => {
+    const n = S.seats[c].sims;
+    return n > 0 ? `🔍${n}` : "零搜索";
+  };
   $("meta").textContent = S.watching
     ? `● ${seatName(S.colors.black)} @${S.seats[S.colors.black].step.toLocaleString()}`
+      + ` ${seatTag(S.colors.black)}`
       + `　vs　○ ${seatName(S.colors.white)} @${S.seats[S.colors.white].step.toLocaleString()}`
+      + ` ${seatTag(S.colors.white)}`
       + (S.opening > 0 ? `　开局 ${S.opening} 手随机（中央 5×5 内）` : "　无随机开局")
-      + searchTag
     : `权重 step ${S.step.toLocaleString()}　${S.size}×${S.size} 连珠禁手`
       + (S.sims > 0 ? searchTag : "　零搜索");
   // 切换失败时（比如两个模型棋盘尺寸不一样）下拉框要弹回真正生效的那个，
@@ -664,12 +729,22 @@ function render() {
   $("thrVal").textContent = $("thr").value + "%";
   $("paceVal").textContent = Number($("pace").value).toFixed(1) + "s";
   renderSims();
+  renderSeatSims();
   $("openVal").textContent = $("opening").value + " 手";
   const watching = !!(S && S.watching);
   $("playPanel").style.display = watching ? "none" : "";
   $("watchPanel").style.display = watching ? "" : "none";
+  // 观战时黑白各有档位，全局那个会把两边一起覆盖 —— 含义冲突，藏掉。
+  $("simsRow").style.display = watching ? "none" : "";
   $("stepBtn").disabled = !watching || S.outcome !== "ongoing" || pending;
-  $("pauseBtn").textContent = watchOn ? "暂停" : "继续";
+  // 暂停/继续是同一个按钮的两个状态，图标和悬停文字要一起换 ——
+  // 只换其中一个就会出现"图标是暂停、提示写着继续"这种自相矛盾的显示。
+  const paused = !watchOn;
+  setHtml("pauseBtn", paused
+    ? '<svg viewBox="0 0 18 18"><path d="M5 3l9 6-9 6z"/></svg>'
+    : '<svg viewBox="0 0 18 18"><path d="M6 3v12M12 3v12"/></svg>');
+  $("pauseBtn").title = paused ? "继续" : "暂停";
+  $("pauseBtn").setAttribute("aria-label", paused ? "继续" : "暂停");
   $("pauseBtn").disabled = !watching || $("manual").checked;
   $("status").textContent = statusText();
   $("status").classList.toggle("over", S.outcome !== "ongoing");
@@ -701,23 +776,23 @@ function render() {
     // 侧栏列表用同一个阈值，和棋盘上的标记保持一致；
     // 一个都不到阈值时明说，别让人以为是坏了。
     const shown = a.top.filter((cd) => cd.prob >= threshold());
-    $("cands").innerHTML = shown.length
+    setHtml("cands", shown.length
       ? shown.map((cd) =>
           `<div class="cand"><b>${cd.label}</b>` +
           `<span class="g"><i style="width:${(cd.prob * 100).toFixed(0)}%"></i></span>` +
           `<span>${(cd.prob * 100).toFixed(1)}%</span></div>`).join("")
       : `<div class="cand" style="color:var(--muted)">没有概率 ≥ ` +
-        `${$("thr").value}% 的候选</div>`;
+        `${$("thr").value}% 的候选</div>`);
   }
 
   // 棋谱
   const cur = viewPly === null ? S.history.length : viewPly;
-  $("moves").innerHTML = S.history.map((h, i) =>
+  setHtml("moves", S.history.map((h, i) =>
     `<div><b>${i + 1}</b><a data-ply="${i + 1}" ` +
     `class="${i + 1 === cur ? "cur" : ""} ${h.forbidden ? "bad" : ""}">` +
     `${h.color === S.colors.black ? "●" : "○"} ${h.label}` +
     `${h.forbidden ? " 禁手" : ""}</a></div>`).join("") ||
-    `<div style="color:var(--muted)">还没落子</div>`;
+    `<div style="color:var(--muted)">还没落子</div>`);
   $("review").style.display = viewPly === null ? "none" : "flex";
   $("reviewTxt").textContent = viewPly === null ? "" : `复盘中：第 ${viewPly} 手`;
 
@@ -810,6 +885,13 @@ $("manual").onchange = () => {
   else if (S && S.watching && S.outcome === "ongoing") { watchOn = true; scheduleNext(); }
   render();
 };
+for (const [id, color] of [["sBlack", 1], ["sWhite", 2]]) {
+  $(id).onchange = () => {
+    if (!S || !S.watching) return;   // 只有观战局分黑白
+    guard(() => api("/api/sims",
+                    { sid: S.sid, sims: Number($(id).value), color }));
+  };
+}
 $("sims").onchange = () => {
   const n = Number($("sims").value);
   if (!S) return;

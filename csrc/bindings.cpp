@@ -346,7 +346,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(py::init([](int board_size, int sims, int num_slots, float c_puct,
                        float fpu_reduction, int num_threads,
                        int forbidden_semantics, bool forbidden_enabled,
-                       int recursion_depth) {
+                       int recursion_depth, int leaves_per_slot) {
              gi::MctsConfig mcts;
              mcts.c_puct = c_puct;
              mcts.fpu_reduction = fpu_reduction;
@@ -356,16 +356,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
              return new gi::BatchSearcher(
                  board_size, sims, mcts, rules,
                  static_cast<gi::ForbiddenSemantics>(forbidden_semantics),
-                 num_slots, num_threads);
+                 num_slots, num_threads, leaves_per_slot);
            }),
            py::arg("board_size") = 15, py::arg("sims") = 800,
            py::arg("num_slots") = 64, py::arg("c_puct") = 1.6f,
            py::arg("fpu_reduction") = 0.25f, py::arg("num_threads") = 16,
            py::arg("forbidden_semantics") = 0,
            py::arg("forbidden_enabled") = true,
-           py::arg("recursion_depth") = 64)
+           py::arg("recursion_depth") = 64,
+           py::arg("leaves_per_slot") = 1)
 
       .def_property_readonly("capacity", &gi::BatchSearcher::capacity)
+      .def_property_readonly("leaves_per_slot",
+                             &gi::BatchSearcher::leaves_per_slot)
+      .def_property_readonly("batch_rows", &gi::BatchSearcher::batch_rows)
+      .def_property_readonly("virtual_outstanding",
+                             &gi::BatchSearcher::virtual_outstanding,
+                             "还有多少虚拟访问没被减回去；一轮结束后必须为 0")
       .def_property_readonly("num_cells", &gi::BatchSearcher::num_cells)
       .def_property_readonly("sims", &gi::BatchSearcher::sims)
       .def_property_readonly("done", &gi::BatchSearcher::done)

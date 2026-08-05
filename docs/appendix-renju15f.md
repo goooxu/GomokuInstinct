@@ -288,4 +288,4 @@ python scripts/search_gap_cross.py --raw runs/renju15f --mcts runs/renju15c --ga
 
 ---
 
-上一篇：[附录 A　renju15c 训练运行记录](appendix-training-run.md)
+上一篇：[附录 A　renju15c 训练运行记录](appendix-training-run.md)　　回到 [目录](README.md)

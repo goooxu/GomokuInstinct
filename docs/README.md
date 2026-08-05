@@ -31,6 +31,7 @@ MCTS、PUCT 或自博弈；这些概念都在正文里从零讲起。
 | 8 | [多卡编排与容灾](08-orchestration.md) | 四张卡、只靠文件系统耦合、随时能断电重来 |
 | 9 | [怎么知道它真的变强了](09-measuring-strength.md) | 两个骗了我很久的指标，和最后那个没法骗人的 |
 | 10 | [零搜索部署](10-zero-search-deployment.md) | 选点的全部代码就三行 |
+| B | [附录 B　renju15f 训练记录](appendix-renju15f.md) | 最强的一版；以及头号指标不能横向比较这件事 |
 | 11 | [静默失败图鉴](11-silent-failures.md) | 二十个不报错、只是悄悄不工作的 bug |
 | 12 | [一个否定性结论](12-negative-result.md) | 拟合得更准，并没有让它更会下棋 |
 | 附录 | [训练运行记录](appendix-training-run.md) | 保留下来的这一轮（48,000 步）实际跑成了什么样 |
